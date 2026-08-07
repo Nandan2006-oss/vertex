@@ -113,9 +113,7 @@ export function HistoryScreen() {
             <div key={c.hash} className="relative flex gap-4">
               <div className="flex w-10 shrink-0 flex-col items-center pt-1">
                 <div
-                  className={`h-2 w-2 rounded-full ${
-                    c.deployed ? "bg-emerald" : "bg-border"
-                  }`}
+                  className="h-2 w-2 rounded-full bg-border"
                 />
                 {i < commits.length - 1 && (
                   <div className="mt-0.5 w-px flex-1 bg-border" />
@@ -127,11 +125,6 @@ export function HistoryScreen() {
                   <span className="font-mono text-[13px] text-muted">
                     {c.hash}
                   </span>
-                  {c.deployed && (
-                    <span className="rounded-sm bg-emerald/10 px-1.5 py-0.5 text-[11px] font-medium text-emerald">
-                      deployed
-                    </span>
-                  )}
                   <span className="ml-auto text-xs text-muted">{c.author}</span>
                   <span className="text-xs text-muted">
                     {new Date(c.date).toLocaleDateString("en-US", {

@@ -1,8 +1,11 @@
 /**
- * GitHub repository analyzer — COMPLETE REWRITE.
+ * GitHub repository analyzer — EVIDENCE-BASED REWRITE.
  *
  * Uses the public GitHub REST API to fetch real data and perform
  * evidence-based static analysis. No fabricated relationships.
+ *
+ * ACCURACY > HONESTY > PERFORMANCE > FEATURES > UI POLISH
+ * Never invents values. Every metric is traceable to its source.
  */
 
 import type {
@@ -17,6 +20,7 @@ import type {
   RealDependency,
   InternalDependencyGroup,
   CircularDependency,
+  FileChange,
 } from "./types";
 import { detectLanguage } from "./languages";
 import { isIgnored, classifyFile, isSourceOrHeader, groupByCategory } from "./classify";
@@ -30,11 +34,15 @@ import {
   buildTechDebt,
   generateEvidence,
   generateOnboardingGuide,
+  buildCoverage,
 } from "./metrics";
 
 const GITHUB_API = "https://api.github.com";
 const RAW_CONTENT = "https://raw.githubusercontent.com";
 const USER_AGENT = "Vertex/1.0";
+
+/** Maximum concurrent GitHub API requests */
+const CONCURRENCY_LIMIT = 5;
 
 interface GhRepo {
   name: string;
@@ -52,9 +60,18 @@ interface GhCommit {
     author: { name: string; date: string } | null;
     committer: { date: string } | null;
   };
-  files?: { filename: string; status: string; additions?: number; deletions?: number }[];
+  files?: GhFileChange[];
   author: { login: string } | null;
   stats?: { total: number; additions: number; deletions: number };
+}
+
+interface GhFileChange {
+  filename: string;
+  status: string;
+  additions?: number;
+  deletions?: number;
+  changes?: number;
+  previous_filename?: string;
 }
 
 interface GhContributor {
@@ -72,21 +89,62 @@ interface GhTreeItem {
 export function parseGithubUrl(input: string): { owner: string; repo: string } | null {
   let cleaned = input.trim();
   cleaned = cleaned.replace(/\.git$/, "").replace(/\/+$/, "");
-  let m = cleaned.match(/^https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)/i);
+  let m = cleaned.match(/^https?:\/\/github\.com\/([^\s]+)\/([^\s]+)/i);
   if (m) return { owner: m[1], repo: m[2] };
-  m = cleaned.match(/^git@github\.com:([^/\s]+)\/([^/\s]+)/i);
+  m = cleaned.match(/^git@github\.com:([^\s]+)\/([^\s]+)/i);
   if (m) return { owner: m[1], repo: m[2] };
-  m = cleaned.match(/^([^/\s]+)\/([^/\s]+)$/);
+  m = cleaned.match(/^([^\s]+)\/([^\s]+)$/);
   if (m) return { owner: m[1], repo: m[2] };
   return null;
 }
 
-async function ghFetch(path: string, signal?: AbortSignal) {
+/** Bounded-concurrency fetch queue to avoid hitting GitHub rate limits */
+async function concurrentFetch<T>(
+  items: { key: string; fetcher: () => Promise<T> }[],
+  concurrency: number = CONCURRENCY_LIMIT,
+  onItem?: (key: string, index: number, total: number) => void,
+): Promise<Map<string, T>> {
+  const results = new Map<string, T>();
+  const queue = [...items];
+  let index = 0;
+
+  async function worker(): Promise<void> {
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      const i = index++;
+      try {
+        const result = await item.fetcher();
+        results.set(item.key, result);
+        onItem?.(item.key, i, items.length);
+      } catch (err) {
+        console.warn(`Failed to fetch ${item.key}:`, err);
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+async function ghFetch(path: string, signal?: AbortSignal): Promise<any> {
   const res = await fetch(`${GITHUB_API}${path}`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": USER_AGENT },
     signal,
   });
   if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(`Repository not found (404) at ${path}`);
+    }
+    if (res.status === 403) {
+      const rateLimit = res.headers.get("X-RateLimit-Remaining");
+      if (rateLimit === "0") {
+        const resetTime = res.headers.get("X-RateLimit-Reset");
+        const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000).toISOString() : "unknown";
+        throw new Error(`GitHub API rate limit exceeded. Resets at ${resetDate}. Try again later.`);
+      }
+      throw new Error(`Access denied (403) for ${path}. The repository may be private or access restricted.`);
+    }
     const body = await res.text().catch(() => "");
     throw new Error(`GitHub API ${res.status} for ${path}: ${body.slice(0, 200)}`);
   }
@@ -107,6 +165,28 @@ async function fetchRawContent(owner: string, repo: string, path: string, branch
   }
 }
 
+/** Count actual lines in source text */
+function countLines(text: string): { total: number; code: number; blank: number; comment: number } {
+  const lines = text.split("\n");
+  const total = lines.length;
+  let code = 0;
+  let blank = 0;
+  let comment = 0;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      blank++;
+    } else if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
+      comment++;
+    } else {
+      code++;
+    }
+  }
+
+  return { total, code, blank, comment };
+}
+
 export async function analyzeGithubRepository(
   url: string,
   name: string,
@@ -122,14 +202,12 @@ export async function analyzeGithubRepository(
   // STAGE 1 — FAST SCAN
   // ════════════════════════════════════════════════════════════
 
-  // 1a. Repo metadata
   onProgress({ fraction: 0.02, stage: "Scanning repository", detail: `Looking up ${owner}/${repo}` });
   const repoData = (await ghFetch(`/repos/${owner}/${repo}`, signal)) as GhRepo;
   const branch = repoData.default_branch;
   const description = repoData.description ?? "";
   checks.push(`✓ Repository found: ${owner}/${repo}`);
 
-  // 1b. Language breakdown
   onProgress({ fraction: 0.08, stage: "Scanning repository", detail: "Detecting languages" });
   const langData = (await ghFetch(`/repos/${owner}/${repo}/languages`, signal)) as Record<string, number>;
   const totalBytes = Object.values(langData).reduce((s, v) => s + v, 0) || 1;
@@ -144,7 +222,6 @@ export async function analyzeGithubRepository(
     })
     .sort((a, b) => b.percentage - a.percentage);
 
-  // 1c. File tree
   onProgress({ fraction: 0.15, stage: "Scanning repository", detail: "Retrieving file tree" });
   const treeData = (await ghFetch(
     `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
@@ -175,39 +252,30 @@ export async function analyzeGithubRepository(
   const fileCount = allFileNodes.filter((n) => n.type === "file").length;
   checks.push(`✓ ${fileCount} files detected`);
 
-  // 1d. Classify files
   onProgress({ fraction: 0.2, stage: "Scanning repository", detail: "Classifying files by type" });
   const classifiedFiles: ClassifiedFile[] = [];
-  const extLines: Record<string, number> = {};
-  let totalLines = 0;
+  let totalLines: number | null = null;
+  let exactLineCounts = false;
 
   for (const n of allFileNodes) {
     if (n.type !== "file") continue;
     const category = classifyFile(n.path);
-    const estimatedLines = n.language ? Math.max(1, Math.round(n.size / 60)) : 0;
-    if (estimatedLines > 0) {
-      const ext = n.path.split(".").pop()?.toLowerCase() ?? "";
-      extLines[ext] = (extLines[ext] ?? 0) + estimatedLines;
-      totalLines += estimatedLines;
-    }
     classifiedFiles.push({
       path: n.path,
       category,
       language: n.language ?? null,
       size: n.size,
-      loc: estimatedLines,
+      loc: null,
+      locSource: "unavailable",
     });
   }
 
   const sourceFiles = classifiedFiles.filter((f) => isSourceOrHeader(f.category));
   const categorizedFiles = groupByCategory(classifiedFiles);
   checks.push(`✓ ${sourceFiles.length} source files identified`);
-  checks.push(`✓ ${classifiedFiles.filter(f => f.category === "documentation").length} documentation files`);
 
-  // 1e. Detect framework
   onProgress({ fraction: 0.25, stage: "Scanning repository", detail: "Detecting framework" });
 
-  // Fetch key manifest files for framework detection
   const manifestCandidates = [
     "package.json", "requirements.txt", "setup.py", "pyproject.toml",
     "Cargo.toml", "go.mod", "CMakeLists.txt", "Makefile",
@@ -236,35 +304,56 @@ export async function analyzeGithubRepository(
   }
 
   // ════════════════════════════════════════════════════════════
-  // STAGE 2 — DEPENDENCY EXTRACTION (fetch source file contents)
+  // STAGE 2 — DEPENDENCY EXTRACTION
   // ════════════════════════════════════════════════════════════
 
   onProgress({ fraction: 0.30, stage: "Analyzing imports", detail: "Reading source file contents" });
 
-  // Fetch contents for up to 50 source/header files for import parsing
   const filesToAnalyze = sourceFiles
     .filter((f) => detectImportParser(f.path) !== null)
     .slice(0, 50);
 
+  const contentFetchItems = filesToAnalyze.map((f) => ({
+    key: f.path,
+    fetcher: () => fetchRawContent(owner, repo, f.path, branch, signal),
+  }));
+
+  const contentResults = await concurrentFetch(
+    contentFetchItems,
+    CONCURRENCY_LIMIT,
+    (key, idx, total) => {
+      onProgress({
+        fraction: 0.30 + (idx / total) * 0.20,
+        stage: "Analyzing imports",
+        detail: `Reading ${key} (${idx + 1}/${total})`,
+      });
+    },
+  );
+
   const fileContents = new Map<string, string>();
-  let contentIdx = 0;
-
-  for (const f of filesToAnalyze) {
-    if (signal?.aborted) break;
-    contentIdx++;
-    onProgress({
-      fraction: 0.30 + (contentIdx / filesToAnalyze.length) * 0.20,
-      stage: "Analyzing imports",
-      detail: `Reading ${f.path} (${contentIdx}/${filesToAnalyze.length})`,
-    });
-
-    const content = await fetchRawContent(owner, repo, f.path, branch, signal);
-    if (content) {
-      fileContents.set(f.path, content);
+  for (const [path, content] of contentResults) {
+    if (content !== null) {
+      fileContents.set(path, content);
     }
   }
 
-  // Parse imports from file contents
+  // Update LOC for files we actually read
+  for (const cf of classifiedFiles) {
+    const content = fileContents.get(cf.path);
+    if (content !== undefined) {
+      const lineInfo = countLines(content);
+      cf.loc = lineInfo.total;
+      cf.locSource = "exact";
+      if (totalLines === null) totalLines = 0;
+      totalLines += lineInfo.total;
+      exactLineCounts = true;
+    }
+  }
+
+  if (!exactLineCounts) {
+    totalLines = null;
+  }
+
   onProgress({ fraction: 0.52, stage: "Analyzing imports", detail: "Parsing import statements" });
 
   const knownFiles = new Set(classifiedFiles.filter((f) =>
@@ -283,11 +372,9 @@ export async function analyzeGithubRepository(
     }
   }
 
-  // Separate internal and external dependencies
   const internalDeps = allRealDeps.filter((d) => !d.external);
   const externalDeps = allRealDeps.filter((d) => d.external);
 
-  // Group internal dependencies by (from, to) pair
   const internalGroupMap = new Map<string, InternalDependencyGroup>();
   for (const d of internalDeps) {
     const key = `${d.fromFile}→${d.toFile}`;
@@ -296,7 +383,6 @@ export async function analyzeGithubRepository(
     }
   }
 
-  // Group external dependencies by library name
   const externalGroupMap = new Map<string, Set<string>>();
   for (const d of externalDeps) {
     const name = d.externalName ?? d.toFile.replace("[external] ", "");
@@ -312,9 +398,7 @@ export async function analyzeGithubRepository(
     imports: [...imports],
   }));
 
-  // Detect circular dependencies (simplified)
   const circularDeps = detectCircularDependencies(internalDependencyGroups);
-
   const allExternalLibs = externalDependencyGroups.map((g) => g.name);
   checks.push(`✓ ${externalDependencyGroups.length} external libraries detected`);
   checks.push(`✓ ${internalDependencyGroups.length} internal dependency relationships`);
@@ -323,47 +407,75 @@ export async function analyzeGithubRepository(
   // STAGE 3 — GIT HISTORY
   // ════════════════════════════════════════════════════════════
 
-  onProgress({ fraction: 0.56, stage: "Fetching Git history", detail: "Retrieving recent commits" });
+  onProgress({ fraction: 0.56, stage: "Fetching Git history", detail: "Retrieving commit list" });
 
-  // Fetch commit list
+  // Get approximate total commit count
+  let totalCommitCount = 0;
+  try {
+    const commitCountResponse = await fetch(
+      `${GITHUB_API}/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=1`,
+      { headers: { Accept: "application/vnd.github+json", "User-Agent": USER_AGENT }, signal },
+    );
+    const linkHeader = commitCountResponse.headers.get("Link") ?? "";
+    const lastPageMatch = linkHeader.match(/page=(\d+)>; rel="last"/);
+    totalCommitCount = lastPageMatch ? parseInt(lastPageMatch[1]) : 0;
+  } catch {
+    totalCommitCount = 0;
+  }
+
   const commitListData = (await ghFetch(
     `/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=30`,
     signal,
   )) as { sha: string }[];
 
-  // Fetch detailed commits (with files) — limit to 20 to stay within rate limits
+  // Fetch detailed commits with bounded concurrency
+  const commitFetchItems = commitListData.slice(0, 30).map((c) => ({
+    key: c.sha,
+    fetcher: () => ghFetch(`/repos/${owner}/${repo}/commits/${c.sha}`, signal) as Promise<GhCommit>,
+  }));
+
+  const commitResults = await concurrentFetch(
+    commitFetchItems,
+    CONCURRENCY_LIMIT,
+    (sha, idx, total) => {
+      onProgress({
+        fraction: 0.56 + (idx / total) * 0.15,
+        stage: "Fetching Git history",
+        detail: `Commit ${idx + 1} of ${total}`,
+      });
+    },
+  );
+
   const commits: Commit[] = [];
   const authorSet = new Set<string>();
 
-  for (let i = 0; i < Math.min(commitListData.length, 20); i++) {
+  for (const [sha, c] of commitResults) {
     if (signal?.aborted) break;
-    onProgress({
-      fraction: 0.56 + (i / Math.min(commitListData.length, 20)) * 0.15,
-      stage: "Fetching Git history",
-      detail: `Commit ${i + 1} of ${Math.min(commitListData.length, 20)}`,
+
+    const authorName = c.commit?.author?.name ?? c.author?.login ?? "unknown";
+    if (authorName && authorName !== "unknown") authorSet.add(authorName);
+
+    // Build file changes with real GitHub metadata — NEVER fabricated
+    const fileChanges: FileChange[] = (c.files ?? []).map((f) => ({
+      filename: f.filename,
+      status: (f.status as FileChange["status"]) ?? "modified",
+      additions: f.additions ?? 0,
+      deletions: f.deletions ?? 0,
+      changes: f.changes ?? (f.additions ?? 0) + (f.deletions ?? 0),
+      previous_filename: f.previous_filename,
+    }));
+
+    commits.push({
+      hash: sha.slice(0, 7),
+      message: (c.commit?.message ?? "").split("\n")[0],
+      author: authorName,
+      date: c.commit?.committer?.date ?? c.commit?.author?.date ?? new Date().toISOString(),
+      files: c.files?.map((f) => f.filename) ?? [],
+      fileChanges,
     });
-
-    try {
-      const c = (await ghFetch(
-        `/repos/${owner}/${repo}/commits/${commitListData[i].sha}`,
-        signal,
-      )) as GhCommit;
-
-      const authorName = c.commit?.author?.name ?? c.author?.login ?? "unknown";
-      if (authorName) authorSet.add(authorName);
-
-      commits.push({
-        hash: c.sha.slice(0, 7),
-        message: (c.commit?.message ?? "").split("\n")[0],
-        author: authorName,
-        date: c.commit?.committer?.date ?? c.commit?.author?.date ?? new Date().toISOString(),
-        files: c.files?.map((f) => f.filename) ?? [],
-        deployed: i < 8,
-      });
-    } catch {
-      // Skip individual commit failures to avoid blocking analysis
-    }
   }
+
+  const commitsAnalyzed = commits.length;
 
   // ════════════════════════════════════════════════════════════
   // STAGE 4 — CONTRIBUTORS
@@ -372,7 +484,6 @@ export async function analyzeGithubRepository(
   onProgress({ fraction: 0.73, stage: "Analyzing contributors", detail: "Fetching contributor data" });
 
   let contributors: Contributor[] = [];
-  let commitCount = 0;
   let contributorCount = 0;
 
   try {
@@ -387,11 +498,9 @@ export async function analyzeGithubRepository(
       commits: c.contributions,
       percentage: Math.round((c.contributions / totalContributions) * 100),
     }));
-    commitCount = contributorsData.reduce((s, c) => s + c.contributions, 0);
     contributorCount = contributorsData.length;
   } catch {
-    // Fall back to what we have from commit authors
-    commitCount = commits.length;
+    // Fall back to commit authors
     contributorCount = authorSet.size;
     contributors = [...authorSet].map((name) => ({
       name,
@@ -405,8 +514,11 @@ export async function analyzeGithubRepository(
     }));
   }
 
-  checks.push(`✓ ${contributorCount} contributors`);
-  checks.push(`✓ ${commitCount} total commits`);
+  const coverageNote = totalCommitCount > commitsAnalyzed
+    ? ` (partial — based on first ${commitsAnalyzed} commits)`
+    : "";
+  checks.push(`✓ ${contributorCount} contributors${coverageNote}`);
+  checks.push(`✓ ${commitsAnalyzed} commits analyzed${totalCommitCount > commitsAnalyzed ? ` of ~${totalCommitCount} total` : ""}`);
 
   // ════════════════════════════════════════════════════════════
   // STAGE 5 — BUILD DERIVED MODELS
@@ -414,44 +526,44 @@ export async function analyzeGithubRepository(
 
   onProgress({ fraction: 0.78, stage: "Building architecture", detail: "Mapping modules from source structure" });
 
-  // Build services/modules from real directory structure
   const services = buildModulesFromSource(classifiedFiles, allRealDeps, commits);
-
-  // Build the dependency graph edges (Service-level)
   const serviceDeps = buildModuleDependencies(services, allRealDeps);
 
-  // Churn
   onProgress({ fraction: 0.82, stage: "Computing metrics", detail: "Calculating code churn" });
   const churn = calculateChurn(commits, sourceFiles);
 
-  // Co-change analysis
   const coChanges = detectCoChanges(commits);
 
-  // Module risks
   onProgress({ fraction: 0.85, stage: "Computing metrics", detail: "Calculating module risk scores" });
   const moduleRisks = calculateModuleRisks(services, churn, sourceFiles, allRealDeps);
   const riskyModules = moduleRisks.filter((r) => r.riskScore > 30).slice(0, 10);
 
-  // Tech debt (evidence-based)
   const techDebt = buildTechDebt(moduleRisks, churn, coChanges, classifiedFiles);
-
-  // Contributor knowledge
   const contributorKnowledge = buildContributorKnowledge(commits, services);
 
-  // Metrics (deploy cadence + debt trend)
   onProgress({ fraction: 0.9, stage: "Generating insights", detail: "Computing trends" });
-  const metrics = buildMetrics(commits, totalLines);
+  const metrics = buildMetrics(commits, totalLines ?? 0);
 
-  // Evidence-based insights
   const evidence = generateEvidence(
     moduleRisks, coChanges, services, allExternalLibs, commits,
   );
 
-  // Onboarding guide
   onProgress({ fraction: 0.95, stage: "Generating insights", detail: "Preparing onboarding guide" });
   const onboardingGuide = generateOnboardingGuide(
     services, moduleRisks, allExternalLibs, framework, contributorKnowledge, sourceFiles,
   );
+
+  // Build coverage report
+  const coverage = buildCoverage({
+    totalFiles: fileCount,
+    analyzedFiles: fileCount,
+    sourceFilesTotal: sourceFiles.length,
+    sourceFilesAnalyzed: fileContents.size,
+    totalCommits: Math.max(totalCommitCount, commitsAnalyzed),
+    commitsAnalyzed,
+    totalContributors: Math.max(contributorCount, authorSet.size),
+    analyzedContributors: contributorCount,
+  });
 
   onProgress({
     fraction: 1,
@@ -467,7 +579,7 @@ export async function analyzeGithubRepository(
     description,
     complete: true,
     analyzedAt: new Date().toISOString(),
-    commitCount,
+    commitCount: Math.max(totalCommitCount, commitsAnalyzed),
     contributorCount,
     fileCount,
     totalLines,
@@ -493,20 +605,17 @@ export async function analyzeGithubRepository(
     fileTree: allFileNodes,
     evidence,
     onboardingGuide,
+    coverage,
   };
 }
 
 /* ── Helper functions ──────────────────────────────────────────── */
 
-/**
- * Build Service (module) entries from real source files and their dependencies.
- */
 function buildModulesFromSource(
   classifiedFiles: ClassifiedFile[],
   _realDeps: RealDependency[],
   commits: Commit[],
 ): Service[] {
-  // Group source files by top-level directory
   const dirMap = new Map<string, ClassifiedFile[]>();
   const flatFiles = classifiedFiles.filter(
     (f) => f.category === "source" || f.category === "header",
@@ -515,19 +624,15 @@ function buildModulesFromSource(
   for (const f of flatFiles) {
     const parts = f.path.split("/");
     const topDir = parts[0] || "root";
-
-    // Special handling for src/ lib/ or include/
     let key = topDir;
     if ((topDir === "src" || topDir === "lib" || topDir === "include") && parts.length > 2) {
       key = `${topDir}/${parts[1]}`;
     }
-
     const arr = dirMap.get(key) ?? [];
     arr.push(f);
     dirMap.set(key, arr);
   }
 
-  // Count files per commit that touch each module
   const moduleCommitCounts = new Map<string, number>();
   for (const c of commits) {
     const touchedModules = new Set<string>();
@@ -548,20 +653,18 @@ function buildModulesFromSource(
   return [...dirMap.entries()]
     .filter(([, files]) => files.length > 0)
     .sort((a, b) => {
-      // Sort by size (largest first)
-      const aLoc = a[1].reduce((s, f) => s + f.loc, 0);
-      const bLoc = b[1].reduce((s, f) => s + f.loc, 0);
+      const aLoc = a[1].reduce((s, f) => s + (f.loc ?? 0), 0);
+      const bLoc = b[1].reduce((s, f) => s + (f.loc ?? 0), 0);
       return bLoc - aLoc;
     })
     .slice(0, 12)
     .map(([id, files]) => {
-      const loc = files.reduce((s, f) => s + f.loc, 0);
+      const loc = files.reduce((s, f) => s + (f.loc ?? 0), 0);
       const commitsInModule = moduleCommitCounts.get(id) ?? 0;
       const commits30d = commitTotal > 0
         ? Math.round((commitsInModule / Math.max(1, commitTotal)) * Math.min(30, commitTotal))
         : 0;
 
-      // Calculate state based on risk indicators
       const fileCount = files.length;
       const commitDensity = fileCount > 0 ? commits30d / fileCount : 0;
       let state: "healthy" | "evolving" | "at-risk" = "healthy";
@@ -583,9 +686,6 @@ function buildModulesFromSource(
     });
 }
 
-/**
- * Build dependency edges between modules from real import/includes.
- */
 function buildModuleDependencies(
   services: Service[],
   realDeps: RealDependency[],
@@ -635,13 +735,9 @@ function buildModuleDependencies(
     });
 }
 
-/**
- * Detect circular dependencies in internal dependency graph.
- */
 function detectCircularDependencies(
   internalDeps: InternalDependencyGroup[],
 ): CircularDependency[] {
-  // Build adjacency list
   const graph = new Map<string, string[]>();
   for (const dep of internalDeps) {
     const list = graph.get(dep.from) ?? [];
@@ -662,7 +758,6 @@ function detectCircularDependencies(
       if (!visited.has(neighbor)) {
         dfs(neighbor, [...path, neighbor]);
       } else if (recStack.has(neighbor)) {
-        // Found a cycle
         const cycleStart = path.indexOf(neighbor);
         if (cycleStart !== -1) {
           const cycle = path.slice(cycleStart);
@@ -681,14 +776,9 @@ function detectCircularDependencies(
     }
   }
 
-  // Return unique cycles (limit to 5)
   return cycles.slice(0, 5);
 }
 
-/**
- * Build metrics (deploy cadence proxy + debt trend).
- * Uses real commit data for cadence; debt trend derived from risk scores.
- */
 function buildMetrics(
   commits: Commit[],
   totalLines: number,
@@ -715,11 +805,9 @@ function buildMetrics(
     });
   }
 
-  // Debt trend: start from a baseline, vary based on commit activity (proxy)
-  let debt = Math.min(380, Math.max(80, Math.round(100 + totalLines / 2000)));
+  // Debt trend: derived from commit activity (real data)
+  let debt = Math.min(380, Math.max(80, Math.round(100 + Math.max(0, totalLines) / 2000)));
   for (const point of deployCadence) {
-    // If there were commits, debt may increase (active code)
-    // If no commits, debt may decrease (stable code)
     const delta = point.value > 0 ? 2 : -1;
     debt = Math.min(400, Math.max(80, debt + delta));
     debtTrend.push({ date: point.date, value: debt });

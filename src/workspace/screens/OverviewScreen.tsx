@@ -8,7 +8,7 @@ export function OverviewScreen() {
   const {
     services, metrics, commits, commitCount, totalLines,
     languages, sourceFiles, framework, classifiedFiles,
-    evidence, moduleRisks, fileCount,
+    evidence, moduleRisks, fileCount, coverage,
   } = analysis;
 
   const stats = useMemo(() => {
@@ -28,13 +28,15 @@ export function OverviewScreen() {
       metrics.debtTrend.length > 0
         ? metrics.debtTrend[metrics.debtTrend.length - 1].value
         : 0;
-    const recentDeploys = commits.filter((c) => c.deployed).slice(0, 3);
+    const recentCommits = commits.slice(0, 3);
     const topRisky = moduleRisks.filter((r) => r.riskScore > 30).slice(0, 3);
+    const confidenceLabel = coverage.confidence === "high" ? "High" : coverage.confidence === "medium" ? "Medium" : "Low";
     return {
       sourceCount, docCount, testCount, configCount,
-      totalServices, avgCommits, currentDebt, recentDeploys, topRisky,
+      totalServices, avgCommits, currentDebt, recentCommits, topRisky,
+      confidenceLabel,
     };
-  }, [services, metrics, commits, sourceFiles, classifiedFiles, moduleRisks]);
+  }, [services, metrics, commits, sourceFiles, classifiedFiles, moduleRisks, coverage]);
 
   if (services.length === 0 && fileCount === 0) {
     return (
@@ -45,6 +47,13 @@ export function OverviewScreen() {
     );
   }
 
+  const locDisplay = totalLines !== null
+    ? `${(totalLines / 1000).toFixed(1)}k LOC`
+    : "LOC: unavailable";
+  const locPerFile = totalLines !== null && stats.sourceCount > 0
+    ? `~${Math.round(totalLines / Math.max(1, stats.sourceCount))} LOC/file`
+    : "—";
+
   return (
     <div className="flex flex-col gap-8">
       {/* Top row: repo stats */}
@@ -52,12 +61,12 @@ export function OverviewScreen() {
         <StatCard
           label="Source files"
           value={String(stats.sourceCount)}
-          note={`${(totalLines / 1000).toFixed(1)}k LOC`}
+          note={locDisplay}
         />
         <StatCard
           label="Modules"
           value={String(stats.totalServices)}
-          note={`${stats.sourceCount > 0 ? `~${Math.round(totalLines / Math.max(1, stats.sourceCount))} LOC/file` : "—"}`}
+          note={locPerFile}
         />
         <StatCard
           label="Commits"
@@ -67,9 +76,26 @@ export function OverviewScreen() {
         <StatCard
           label="Debt score"
           value={String(stats.currentDebt)}
-          note="current"
+          note="current (composite heuristic)"
           state={stats.currentDebt > 340 ? "rust" : "emerald"}
         />
+      </div>
+
+      {/* Coverage indicator */}
+      <div className="rounded-sm border border-border bg-surface px-4 py-2">
+        <div className="flex items-center gap-3 text-xs">
+          <span className="text-secondary">Analysis coverage:</span>
+          <span className={`font-medium ${
+            coverage.confidence === "high" ? "text-emerald" :
+            coverage.confidence === "medium" ? "text-amber" : "text-rust"
+          }`}>
+            {stats.confidenceLabel}
+          </span>
+          <span className="text-muted">|</span>
+          <span className="text-muted">{coverage.history.label}</span>
+          <span className="text-muted">|</span>
+          <span className="text-muted">{coverage.files.analyzed} / {coverage.files.total} files</span>
+        </div>
       </div>
 
       {/* Framework + language info */}
@@ -163,22 +189,22 @@ export function OverviewScreen() {
         />
       </div>
 
-      {/* Recent deploys */}
+      {/* Recent commits (NOT deploys — we don't have deployment evidence) */}
       <div>
-        <h3 className="mb-3 text-sm font-medium text-secondary">Recent deploys</h3>
-        {stats.recentDeploys.length === 0 ? (
+        <h3 className="mb-3 text-sm font-medium text-secondary">Recent commits</h3>
+        {stats.recentCommits.length === 0 ? (
           <EmptyState
-            title="No deploy history yet"
-            body="Deploys are derived from commit activity."
+            title="No commit history available"
+            body="Commit history is derived from git metadata. GitHub repositories include history automatically."
           />
         ) : (
           <div className="flex flex-col gap-2">
-            {stats.recentDeploys.map((c) => (
+            {stats.recentCommits.map((c) => (
               <div
                 key={c.hash}
                 className="flex items-center gap-3 rounded-sm border border-border px-3 py-2 text-sm"
               >
-                <span className="inline-block h-2 w-2 rounded-full bg-emerald" />
+                <span className="inline-block h-2 w-2 rounded-full bg-border" />
                 <span className="font-mono text-xs text-muted">{c.hash}</span>
                 <span className="text-foreground">{c.message}</span>
                 <span className="ml-auto whitespace-nowrap text-xs text-muted">
@@ -261,7 +287,10 @@ function RiskyModuleCard({ risk }: { risk: ModuleRisk }) {
       <div className="flex items-center justify-between">
         <span className="font-mono text-sm font-medium text-foreground">{risk.moduleName}</span>
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-sm bg-rust/10 px-1.5 py-0.5 text-xs font-medium text-rust">
+          <span
+            title="Composite heuristic risk score"
+            className="inline-flex items-center gap-1 rounded-sm bg-rust/10 px-1.5 py-0.5 text-xs font-medium text-rust"
+          >
             {risk.riskScore}/100
           </span>
           {risk.isGodModule && (
@@ -274,7 +303,7 @@ function RiskyModuleCard({ risk }: { risk: ModuleRisk }) {
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
         <span>{risk.loc} LOC</span>
         <span>{risk.fileCount} files</span>
-        <span>Complexity: {risk.complexity.toFixed(1)}</span>
+        <span>Complexity estimate: {risk.complexityEstimate}</span>
         <span>{risk.churn} commits</span>
         <span>{risk.dependentCount} dependents</span>
       </div>
@@ -287,6 +316,20 @@ function RiskyModuleCard({ risk }: { risk: ModuleRisk }) {
             </li>
           ))}
         </ul>
+      )}
+      {/* Factor breakdown */}
+      {risk.factors && risk.factors.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2 border-t border-border pt-2">
+          {risk.factors.filter(f => f.contribution > 0).map((f, i) => (
+            <span
+              key={i}
+              title={f.evidence.explanation}
+              className="rounded-sm bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+            >
+              {f.name}: +{f.contribution}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
