@@ -3,8 +3,6 @@
  *
  * Every type here represents REAL, EVIDENCE-BASED data derived from
  * static analysis or git history — never fabricated relationships.
- *
- * ACCURACY > HONESTY > PERFORMANCE > FEATURES > UI POLISH
  */
 
 export type ServiceState = "healthy" | "evolving" | "at-risk";
@@ -28,10 +26,7 @@ export interface ClassifiedFile {
   category: FileCategory;
   language: string | null;
   size: number;
-  /** Lines of code. This is EXACT if we read the file, or null if not analyzed. */
-  loc: number | null;
-  /** If loc is estimated, this tells you how */
-  locSource: "exact" | "estimated" | "unavailable";
+  loc: number;
 }
 
 export interface Service {
@@ -83,43 +78,15 @@ export interface CircularDependency {
   cycle: string[];
 }
 
-/**
- * Evidence that backs a single risk factor.
- * Every measurable claim should be traceable to its source.
- */
-export interface RiskEvidence {
-  metric: string;
-  value: string | number;
-  label: string;
-  /** Human-readable explanation of why this contributes to risk */
-  explanation: string;
-  /** How confident we are in this measurement */
-  confidence: "high" | "medium" | "low";
-}
-
-/**
- * A single risk factor with its supporting evidence.
- */
-export interface RiskFactor {
-  name: string;
-  contribution: number; // 0-100 weight contribution to overall score
-  evidence: RiskEvidence;
-}
-
 export interface TechDebtItem {
   id: string;
   hotspot: string;
   riskScore: number;
-  /** Evidence-based reasons broken down with data sources */
-  factors: RiskFactor[];
+  agingDebt: string;
   filePath: string;
   detail: string;
-  /** Legacy: use factors instead */
+  /** Reasons broken down with evidence */
   evidence: DebtEvidence[];
-  /** When this risk pattern was first observed (from git history) */
-  firstObserved?: string;
-  /** How long the module has remained elevated risk (from git history) */
-  riskDurationDays?: number;
 }
 
 export interface DebtEvidence {
@@ -134,18 +101,7 @@ export interface Commit {
   author: string;
   date: string;
   files: string[];
-  /** File-level change metadata from GitHub API */
-  fileChanges?: FileChange[];
-}
-
-/** File-level change metadata returned by GitHub API */
-export interface FileChange {
-  filename: string;
-  status: "added" | "modified" | "removed" | "renamed" | "copied" | "changed";
-  additions: number;
-  deletions: number;
-  changes: number;
-  previous_filename?: string;
+  deployed: boolean;
 }
 
 export interface MetricPoint {
@@ -177,19 +133,14 @@ export interface FileNode {
   language?: string;
 }
 
-/** Churn metrics for a single file — calculated from REAL commit data */
+/** Churn metrics for a single file */
 export interface ChurnRecord {
   filePath: string;
   totalCommits: number;
   linesAdded: number;
   linesDeleted: number;
-  totalChanges: number;
   recentChanges: number;
   changeFrequency: "high" | "moderate" | "low";
-  /** When this file was first observed in git history */
-  firstChanged?: string;
-  /** Most recent change date */
-  lastChanged?: string;
 }
 
 /** Co-change relationship between two files */
@@ -200,63 +151,23 @@ export interface CoChange {
   totalCommits: number;
 }
 
-/** Knowledge map for a contributor — evidence-based */
+/** Knowledge map for a contributor */
 export interface ContributorKnowledge {
   name: string;
   commits: number;
   filesChanged: number;
-  /** Total lines changed. This is EXACT if we have file change data, or null if unknown. */
-  linesChanged: number | null;
-  linesAdded: number;
-  linesDeleted: number;
+  linesChanged: number;
   modulesTouched: string[];
   primaryModules: string[];
-  firstContribution?: string;
-  mostRecentContribution?: string;
 }
 
-/**
- * Analysis-wide coverage tracking.
- * Every metric should report how much of the repository was actually examined.
- */
-export interface AnalysisCoverage {
-  /** File analysis coverage */
-  files: {
-    total: number;
-    analyzed: number;
-    skipped: number;
-  };
-  /** Dependency analysis coverage */
-  dependencies: {
-    sourceFilesTotal: number;
-    sourceFilesAnalyzed: number;
-  };
-  /** Git history coverage */
-  history: {
-    totalCommits: number;
-    commitsAnalyzed: number;
-    /** e.g. "Detailed history: 486 / 1,204 commits analyzed" */
-    label: string;
-  };
-  /** Contributor coverage */
-  contributors: {
-    total: number;
-    analyzed: number;
-  };
-  /** Overall confidence level */
-  confidence: "high" | "medium" | "low";
-}
-
-/** Module-level risk metrics — every value comes from real evidence */
+/** Module-level risk metrics */
 export interface ModuleRisk {
   moduleName: string;
   riskScore: number;
-  /** Breakdown of risk factors with evidence */
-  factors: RiskFactor[];
   loc: number;
   fileCount: number;
-  /** Structural complexity estimate — NOT cyclomatic complexity */
-  complexityEstimate: number;
+  complexity: number;
   churn: number;
   dependencyCount: number;
   dependentCount: number;
@@ -285,7 +196,7 @@ export interface FrameworkInfo {
 
 export interface EvidenceItem {
   insight: string;
-  source: "Static Analysis" | "Git History" | "Static Analysis + Git History";
+  source: "Static Analysis" | "Git History" | "Static Analysis + Git History" | "AI interpretation of analyzed evidence";
   facts: string[];
   inference: string;
 }
@@ -311,7 +222,7 @@ export interface RepositoryAnalysis {
   commitCount: number;
   contributorCount: number;
   fileCount: number;
-  totalLines: number | null; // null if unavailable
+  totalLines: number;
 
   // Language and framework
   languages: Language[];
@@ -326,7 +237,7 @@ export interface RepositoryAnalysis {
   contributorKnowledge: ContributorKnowledge[];
   commits: Commit[];
 
-  // Module / Architecture regions (not necessarily "services")
+  // Module / Service architecture
   services: Service[];
   dependencies: Dependency[];
 
@@ -341,7 +252,7 @@ export interface RepositoryAnalysis {
   churn: ChurnRecord[];
   coChanges: CoChange[];
 
-  // Risk — evidence-backed
+  // Risk
   techDebt: TechDebtItem[];
   moduleRisks: ModuleRisk[];
   riskyModules: ModuleRisk[];
@@ -350,27 +261,12 @@ export interface RepositoryAnalysis {
   fileTree: FileNode[];
   architectureSnapshots?: ArchitectureSnapshot[];
 
-  // Insights — evidence only, never AI-fabricated
+  // Insights
   evidence: EvidenceItem[];
 
   // Onboarding
   onboardingGuide?: OnboardingGuide;
-
-  // Coverage — how complete is this analysis?
-  coverage: AnalysisCoverage;
 }
-
-/**
- * Configurable risk scoring weights.
- * All magic numbers are centralized here.
- */
-export const RISK_WEIGHTS = {
-  complexity: 30,
-  churn: 25,
-  coupling: 25,
-  size: 10,
-  busFactor: 10,
-} as const;
 
 export interface AnalysisProgress {
   fraction: number;
