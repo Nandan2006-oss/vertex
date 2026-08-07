@@ -443,6 +443,7 @@ export async function analyzeGithubRepository(
         stage: "Fetching Git history",
         detail: `Commit ${idx + 1} of ${total}`,
       });
+      void sha;
     },
   );
 

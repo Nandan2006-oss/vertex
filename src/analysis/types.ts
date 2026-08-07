@@ -112,6 +112,7 @@ export interface TechDebtItem {
   riskScore: number;
   /** Evidence-based reasons broken down with data sources */
   factors: RiskFactor[];
+  agingDebt: string;
   filePath: string;
   detail: string;
   /** Legacy: use factors instead */

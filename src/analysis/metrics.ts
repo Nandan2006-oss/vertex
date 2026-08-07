@@ -24,7 +24,6 @@ import type {
   OnboardingGuide,
   FrameworkInfo,
   RiskFactor,
-  FileChange,
   AnalysisCoverage,
 } from "./types";
 import { RISK_WEIGHTS } from "./types";
