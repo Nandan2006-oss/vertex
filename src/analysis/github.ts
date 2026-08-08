@@ -35,6 +35,7 @@ import {
   generateEvidence,
   generateOnboardingGuide,
   buildCoverage,
+  estimateComplexity,
 } from "./metrics";
 
 const GITHUB_API = "https://api.github.com";
@@ -267,6 +268,7 @@ export async function analyzeGithubRepository(
       size: n.size,
       loc: null,
       locSource: "unavailable",
+      complexityEstimate: null,
     });
   }
 
@@ -337,16 +339,25 @@ export async function analyzeGithubRepository(
     }
   }
 
-  // Update LOC for files we actually read
+  // Update LOC and complexity for files we actually read
+  const todoCountTotal: { count: number; files: number } = { count: 0, files: 0 };
   for (const cf of classifiedFiles) {
     const content = fileContents.get(cf.path);
     if (content !== undefined) {
       const lineInfo = countLines(content);
       cf.loc = lineInfo.total;
       cf.locSource = "exact";
+      cf.complexityEstimate = estimateComplexity(content, cf.language);
       if (totalLines === null) totalLines = 0;
       totalLines += lineInfo.total;
       exactLineCounts = true;
+
+      // Count TODO/FIXME/HACK markers in actual code (evidence for debt)
+      const todoMatch = content.match(/\b(TODO|FIXME|HACK|XXX|BUG|WORKAROUND|HACKY)\b/gi);
+      if (todoMatch) {
+        todoCountTotal.count += todoMatch.length;
+        todoCountTotal.files++;
+      }
     }
   }
 
@@ -536,14 +547,34 @@ export async function analyzeGithubRepository(
   const coChanges = detectCoChanges(commits);
 
   onProgress({ fraction: 0.85, stage: "Computing metrics", detail: "Calculating module risk scores" });
-  const moduleRisks = calculateModuleRisks(services, churn, sourceFiles, allRealDeps);
+
+  // Build contributor count per module from REAL data
+  const moduleContributorCounts = new Map<string, Set<string>>();
+  for (const c of commits) {
+    for (const file of c.files ?? []) {
+      for (const svc of services) {
+        if (file.startsWith(svc.id) || svc.files.includes(file)) {
+          if (!moduleContributorCounts.has(svc.id)) {
+            moduleContributorCounts.set(svc.id, new Set());
+          }
+          moduleContributorCounts.get(svc.id)!.add(c.author);
+        }
+      }
+    }
+  }
+  const contributorCountMap = new Map<string, number>();
+  for (const [moduleId, authors] of moduleContributorCounts) {
+    contributorCountMap.set(moduleId, authors.size);
+  }
+
+  const moduleRisks = calculateModuleRisks(services, churn, sourceFiles, allRealDeps, contributorCountMap);
   const riskyModules = moduleRisks.filter((r) => r.riskScore > 30).slice(0, 10);
 
   const techDebt = buildTechDebt(moduleRisks, churn, coChanges, classifiedFiles);
   const contributorKnowledge = buildContributorKnowledge(commits, services);
 
   onProgress({ fraction: 0.9, stage: "Generating insights", detail: "Computing trends" });
-  const metrics = buildMetrics(commits, totalLines ?? 0);
+  const metrics = buildMetrics(commits, todoCountTotal);
 
   const evidence = generateEvidence(
     moduleRisks, coChanges, services, allExternalLibs, commits,
@@ -634,8 +665,14 @@ function buildModulesFromSource(
     dirMap.set(key, arr);
   }
 
+  // Count real commits per module across ALL analyzed commits
   const moduleCommitCounts = new Map<string, number>();
+  const recentCutoff = new Date();
+  recentCutoff.setDate(recentCutoff.getDate() - 30);
+  const moduleRecentCounts = new Map<string, number>();
   for (const c of commits) {
+    const commitDate = new Date(c.date);
+    const isRecent = commitDate >= recentCutoff;
     const touchedModules = new Set<string>();
     for (const file of c.files ?? []) {
       for (const key of dirMap.keys()) {
@@ -646,10 +683,11 @@ function buildModulesFromSource(
     }
     for (const m of touchedModules) {
       moduleCommitCounts.set(m, (moduleCommitCounts.get(m) ?? 0) + 1);
+      if (isRecent) {
+        moduleRecentCounts.set(m, (moduleRecentCounts.get(m) ?? 0) + 1);
+      }
     }
   }
-
-  const commitTotal = commits.length;
 
   return [...dirMap.entries()]
     .filter(([, files]) => files.length > 0)
@@ -661,10 +699,8 @@ function buildModulesFromSource(
     .slice(0, 12)
     .map(([id, files]) => {
       const loc = files.reduce((s, f) => s + (f.loc ?? 0), 0);
-      const commitsInModule = moduleCommitCounts.get(id) ?? 0;
-      const commits30d = commitTotal > 0
-        ? Math.round((commitsInModule / Math.max(1, commitTotal)) * Math.min(30, commitTotal))
-        : 0;
+      // REAL 30-day commit count (not estimated)
+      const commits30d = moduleRecentCounts.get(id) ?? 0;
 
       const fileCount = files.length;
       const commitDensity = fileCount > 0 ? commits30d / fileCount : 0;
@@ -782,13 +818,13 @@ function detectCircularDependencies(
 
 function buildMetrics(
   commits: Commit[],
-  totalLines: number,
+  debtMarkers: { count: number; files: number },
 ): RepositoryAnalysis["metrics"] {
   const deployCadence: RepositoryAnalysis["metrics"]["deployCadence"] = [];
   const debtTrend: RepositoryAnalysis["metrics"]["debtTrend"] = [];
   const now = new Date();
 
-  // Build daily commit cadence for the last 14 days
+  // Build daily commit cadence for the last 14 days (REAL data)
   const dayCount = new Map<string, number>();
   for (const c of commits) {
     const day = c.date.slice(0, 10);
@@ -806,12 +842,12 @@ function buildMetrics(
     });
   }
 
-  // Debt trend: derived from commit activity (real data)
-  let debt = Math.min(380, Math.max(80, Math.round(100 + Math.max(0, totalLines) / 2000)));
+  // Debt trend: based on actual TODO/FIXME/HACK markers found in analyzed files
+  // If no markers found, debt trend is flat (no evidence of debt markers)
+  const baseDebt = Math.min(400, Math.max(0, debtMarkers.count * 10));
   for (const point of deployCadence) {
-    const delta = point.value > 0 ? 2 : -1;
-    debt = Math.min(400, Math.max(80, debt + delta));
-    debtTrend.push({ date: point.date, value: debt });
+    // Debt level is the count of markers (direct evidence)
+    debtTrend.push({ date: point.date, value: baseDebt });
   }
 
   return { deployCadence, debtTrend };

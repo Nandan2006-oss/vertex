@@ -1,12 +1,12 @@
 /**
- * Local repository analyzer — EVIDENCE-BASED REWRITE.
+ * Local repository analyzer — EVIDENCE-BASED.
  *
  * Works entirely in the browser from `webkitdirectory` File objects.
- * Derives real data: file tree, language mix (by extension + actual line counts),
- * LOC (exact from file contents), top-level modules, and commit count
- * from `.git/logs/HEAD` when present.
+ * Derives real data: file tree, language mix, LOC, top-level modules,
+ * and git metadata from .git files when present.
  *
  * NEVER invents values. Every metric is traceable to its source.
+ * If evidence is insufficient, reports it as unavailable.
  */
 import type {
   AnalysisProgressFn,
@@ -25,30 +25,19 @@ import type {
 } from "./types";
 import { buildLanguages, detectLanguage } from "./languages";
 import { classifyFile, groupByCategory } from "./classify";
+import { buildCoverage } from "./metrics";
 
 const IGNORED_PATHS = new Set([
-  "node_modules",
-  ".git",
-  ".next",
-  ".nuxt",
-  ".cache",
-  "dist",
-  "build",
-  "coverage",
-  ".turbo",
-  ".parcel-cache",
-  "vendor",
-  "Pods",
-  ".venv",
-  "venv",
-  "target",
-  "__pycache__",
-  ".idea",
-  ".vscode",
-  ".DS_Store",
+  "node_modules", ".git", ".next", ".nuxt", ".cache",
+  "dist", "build", "coverage", ".turbo", ".parcel-cache",
+  "vendor", "Pods", ".venv", "venv", "target", "__pycache__",
+  ".idea", ".vscode", ".DS_Store",
 ]);
 
-const IGNORED_FILES = new Set([".DS_Store", "Thumbs.db", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"]);
+const IGNORED_FILES = new Set([
+  ".DS_Store", "Thumbs.db", "package-lock.json",
+  "yarn.lock", "pnpm-lock.yaml",
+]);
 
 function isIgnored(relPath: string): boolean {
   const parts = relPath.split("/");
@@ -63,31 +52,24 @@ function stripRoot(relPath: string): string {
   return idx === -1 ? relPath : relPath.slice(idx + 1);
 }
 
-/** Count lines of text content quickly. Returns exact counts. */
-async function countLines(file: File): Promise<{ total: number; code: number; blank: number; comment: number } | null> {
+/** Count lines of text content. Returns exact counts. */
+async function countLines(file: File): Promise<{
+  total: number; code: number; blank: number; comment: number
+} | null> {
   try {
     const text = await file.text();
     const lines = text.split("\n");
     const total = lines.length;
-    let code = 0;
-    let blank = 0;
-    let comment = 0;
-
+    let code = 0, blank = 0, comment = 0;
     for (const line of lines) {
       const trimmed = line.trim();
-      if (trimmed === "") {
-        blank++;
-      } else if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
-        comment++;
-      } else {
-        code++;
-      }
+      if (trimmed === "") { blank++; }
+      else if (trimmed.startsWith("//") || trimmed.startsWith("#") ||
+               trimmed.startsWith("/*") || trimmed.startsWith("*")) { comment++; }
+      else { code++; }
     }
-
     return { total, code, blank, comment };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 export async function analyzeLocalRepository(
@@ -102,7 +84,6 @@ export async function analyzeLocalRepository(
   const fileNodes: FileNode[] = [];
   const classifiedFiles: ClassifiedFile[] = [];
   const extLines: Record<string, number> = {};
-  const dirCommits = new Map<string, number>();
   let totalLines: number | null = null;
   let scanned = 0;
 
@@ -115,6 +96,7 @@ export async function analyzeLocalRepository(
     const lang = detectLanguage(relPath);
     let loc: number | null = null;
     let locSource: "exact" | "unavailable" = "unavailable";
+    let complexityEstimate: number | null = null;
 
     if (lang) {
       const count = await countLines(file);
@@ -126,8 +108,6 @@ export async function analyzeLocalRepository(
         const ext = relPath.slice(relPath.lastIndexOf(".") + 1).toLowerCase();
         extLines[ext] = (extLines[ext] ?? 0) + count.total;
       }
-      const top = relPath.split("/")[0] || "root";
-      dirCommits.set(top, (dirCommits.get(top) ?? 0) + (loc ?? file.size));
     }
 
     const category = classifyFile(relPath);
@@ -138,6 +118,7 @@ export async function analyzeLocalRepository(
       size: file.size,
       loc,
       locSource,
+      complexityEstimate,
     });
 
     fileNodes.push({ path: relPath, type: "file", size: file.size, language: lang?.name });
@@ -157,17 +138,14 @@ export async function analyzeLocalRepository(
 
   onProgress({ fraction: 0.55, stage: "Reading Git history", detail: "Locating .git metadata" });
 
+  // Read git log for author/commit info
   const gitFiles = sorted.filter((f) =>
     (f.webkitRelativePath ?? f.name).split("/").includes(".git"),
   );
   const gitContents = new Map<string, string>();
   for (const gf of gitFiles) {
     const rel = stripRoot(gf.webkitRelativePath ?? gf.name);
-    try {
-      gitContents.set(rel, await gf.text());
-    } catch {
-      /* binary object files are skipped */
-    }
+    try { gitContents.set(rel, await gf.text()); } catch { /* binary */ }
   }
 
   let branch = "main";
@@ -185,9 +163,12 @@ export async function analyzeLocalRepository(
     if (m) branch = m[1].trim();
   }
 
-  onProgress({ fraction: 0.65, stage: "Reading Git history", detail: complete ? `${commitCount} commits found` : "No git metadata uploaded — using file snapshot" });
+  onProgress({
+    fraction: 0.65, stage: "Reading Git history",
+    detail: complete ? `${commitCount} commits found` : "No git metadata uploaded — using file snapshot",
+  });
 
-  // Contributors — only from real git data
+  // Contributors — ONLY from real git data
   let contributors: Contributor[] = [];
   if (complete) {
     onProgress({ fraction: 0.7, stage: "Counting contributors", detail: "Parsing commit authors" });
@@ -218,75 +199,85 @@ export async function analyzeLocalRepository(
   const languages = buildLanguages(extLines);
 
   onProgress({ fraction: 0.84, stage: "Building module map", detail: "Mapping top-level directories" });
-  const services = buildModules(fileNodes, classifiedFiles, dirCommits, commitCount);
+  const services = buildModules(fileNodes, classifiedFiles);
+
+  // No git history = no churn, no co-changes, no commits
   const churn: ChurnRecord[] = [];
   const coChanges: CoChange[] = [];
-  const internalDeps = buildInternalDeps(services);
+  const commits: RepositoryAnalysis["commits"] = [];
+  const contributorKnowledge: ContributorKnowledge[] = contributors.length > 0
+    ? contributors.map((c) => ({
+        name: c.name,
+        commits: c.commits,
+        filesChanged: 0,
+        linesChanged: null,
+        linesAdded: 0,
+        linesDeleted: 0,
+        modulesTouched: [],
+        primaryModules: [],
+      }))
+    : [];
+
+  // NO fabricated dependencies — dependency analysis requires parsing imports
+  const internalDeps: RepositoryAnalysis["internalDependencies"] = [];
   const externalDeps: RepositoryAnalysis["externalDependencies"] = [];
+  const deps: RepositoryAnalysis["dependencies"] = [];
 
-  onProgress({ fraction: 0.92, stage: "Generating insights", detail: "Computing trend metrics" });
+  // Metrics: commit cadence is unavailable (no timestamp data from git logs)
+  // Debt trend: unavailable unless we have TODO/FIXME markers
+  const metrics: RepositoryAnalysis["metrics"] = {
+    deployCadence: [],
+    debtTrend: [],
+  };
 
-  const metrics = buildMetrics(commitCount, totalLines ?? 0);
-  const techDebt = buildTechDebtItems(classifiedFiles, extLines);
+  // Tech debt: based ONLY on large files from the scan (no fabricated scores)
+  const techDebt = buildTechDebtItems(classifiedFiles);
+
+  // Module risks: all counts are 0 because we have no real git or dep data
   const moduleRisks: ModuleRisk[] = services.map((svc) => {
-    const loc = svc.loc;
-    const fileCount = svc.files.length;
-    const complexityEstimate = fileCount > 0 ? Math.round((loc / fileCount) * 0.15 + 1) : 0;
+    const svcSourceFiles = classifiedFiles.filter(
+      (f) => f.path.startsWith(svc.id),
+    );
+    const svcLoc = svcSourceFiles.reduce((s, f) => s + (f.loc ?? 0), 0);
+    const svcFileCount = svcSourceFiles.length;
+    const complexities = svcSourceFiles
+      .map((f) => f.complexityEstimate)
+      .filter((c): c is number => c !== null);
+    const avgComplexity = complexities.length > 0
+      ? Math.round(complexities.reduce((a, b) => a + b, 0) / complexities.length)
+      : 0;
+
     return {
       moduleName: svc.name,
       riskScore: 0,
       factors: [],
-      loc,
-      fileCount,
-      complexityEstimate,
+      loc: svcLoc,
+      fileCount: svcFileCount,
+      complexityEstimate: avgComplexity,
       churn: 0,
       dependencyCount: 0,
       dependentCount: 0,
-      contributorCount: Math.max(1, Math.round(svc.commits30d / 3 + 1)),
-      isGodModule: fileCount > 5 && loc > 2000 && complexityEstimate > 10,
+      contributorCount: 0,
+      isGodModule: false,
       reasons: [],
     };
   });
 
-  const contributorKnowledge: ContributorKnowledge[] = contributors.map((c) => ({
-    name: c.name,
-    commits: c.commits,
-    filesChanged: 0,
-    linesChanged: null, // unavailable — no file-level change data from git logs
-    linesAdded: 0,
-    linesDeleted: 0,
-    modulesTouched: [],
-    primaryModules: [],
-  }));
-
   const evidence: EvidenceItem[] = [];
   const frameInfo: FrameworkInfo | null = null;
-
   const onboardGuide: OnboardingGuide = buildOnboardingGuide(name, services, sourceFiles, classifiedFiles);
 
-  const coverage = {
-    files: {
-      total: fileNodes.length,
-      analyzed: fileNodes.length,
-      skipped: 0,
-    },
-    dependencies: {
-      sourceFilesTotal: sourceFiles.length,
-      sourceFilesAnalyzed: 0,
-    },
-    history: {
-      totalCommits: commitCount,
-      commitsAnalyzed: 0,
-      label: complete
-        ? `Commit count: ${commitCount} (metadata only)`
-        : "Git history: unavailable — .git not uploaded",
-    },
-    contributors: {
-      total: contributors.length,
-      analyzed: contributors.length,
-    },
-    confidence: (complete && totalLines !== null ? "high" : "low") as "high" | "medium" | "low",
-  };
+  // Coverage: honest accounting
+  const coverage = buildCoverage({
+    totalFiles: fileNodes.length,
+    analyzedFiles: fileNodes.length,
+    sourceFilesTotal: sourceFiles.length,
+    sourceFilesAnalyzed: 0, // no deep import analysis
+    totalCommits: commitCount,
+    commitsAnalyzed: 0, // no per-file change data from git logs
+    totalContributors: contributors.length,
+    analyzedContributors: contributors.length,
+  });
 
   onProgress({ fraction: 1, stage: "Analysis complete", detail: name });
 
@@ -309,9 +300,9 @@ export async function analyzeLocalRepository(
     classifiedFiles: groupByCategory(classifiedFiles),
     contributors,
     contributorKnowledge,
-    commits: [],
+    commits,
     services,
-    dependencies: buildDepsFromServices(services),
+    dependencies: deps,
     realDependencies: [],
     internalDependencies: internalDeps,
     externalDependencies: externalDeps,
@@ -329,13 +320,11 @@ export async function analyzeLocalRepository(
   };
 }
 
-/* ── Derived-data builders (repo-specific, never fabricated) ── */
+/* ── Derived-data builders (evidence-only) ── */
 
 function buildModules(
   nodes: FileNode[],
   classifiedFiles: ClassifiedFile[],
-  dirLines: Map<string, number>,
-  commitCount: number,
 ): RepositoryAnalysis["services"] {
   const tops = new Map<string, FileNode[]>();
   for (const n of nodes) {
@@ -348,101 +337,43 @@ function buildModules(
     tops.set(key, arr);
   }
 
-  const sorted = [...tops.entries()]
+  return [...tops.entries()]
     .filter(([, arr]) => arr.length > 0)
     .sort((a, b) => b[1].length - a[1].length)
-    .slice(0, 10);
+    .slice(0, 10)
+    .map(([id, arr]) => {
+      const svcFiles = classifiedFiles.filter((cf) => cf.path.startsWith(id));
+      const realLoc = svcFiles.reduce((s, cf) => s + (cf.loc ?? 0), 0);
 
-  return sorted.map(([id, arr]) => {
-    const perDir = dirLines.get(id.split("/")[0]) ?? 0;
-    const loc = Math.max(perDir, arr.length);
-    const commits30d = commitCount > 0 ? Math.max(1, Math.round(commitCount / 12)) : 0;
-    // Derive state from actual data
-    let state: "healthy" | "evolving" | "at-risk" = "healthy";
-    if (loc > 3000) {
-      state = "at-risk";
-    } else if (loc > 1000) {
-      state = "evolving";
-    }
-    const files = classifiedFiles
-      .filter((cf) => cf.path.startsWith(id))
-      .map((cf) => cf.path);
-    return {
-      id,
-      name: id,
-      description: `${arr.length} file${arr.length === 1 ? "" : "s"} in ${id}`,
-      state,
-      loc,
-      commits30d,
-      files: files.length > 0 ? files : arr.map((n) => n.path),
-    };
-  });
-}
+      // Module state from ACTUAL data (real LOC only)
+      let state: "healthy" | "evolving" | "at-risk" = "healthy";
+      if (realLoc > 3000) { state = "at-risk"; }
+      else if (realLoc > 1000) { state = "evolving"; }
 
-function buildInternalDeps(services: RepositoryAnalysis["services"]): RepositoryAnalysis["internalDependencies"] {
-  if (services.length < 2) return [];
-  const deps: RepositoryAnalysis["internalDependencies"] = [];
-  for (let i = 0; i < services.length - 1; i++) {
-    deps.push({
-      from: services[i].id,
-      to: services[i + 1].id,
-      evidence: `${services[i].id}/** → ${services[i + 1].id}/**`,
+      return {
+        id,
+        name: id,
+        description: `${arr.length} file${arr.length === 1 ? "" : "s"} in ${id}`,
+        state,
+        loc: realLoc,
+        commits30d: 0, // unavailable — no real git commit data with timestamps
+        files: svcFiles.length > 0
+          ? svcFiles.map((cf) => cf.path)
+          : arr.map((n) => n.path),
+      };
     });
-  }
-  return deps;
-}
-
-function buildDepsFromServices(services: RepositoryAnalysis["services"]): RepositoryAnalysis["dependencies"] {
-  if (services.length < 2) return [];
-  const deps: RepositoryAnalysis["dependencies"] = [];
-  for (let i = 0; i < services.length - 1; i++) {
-    const from = services[i];
-    const to = services[i + 1];
-    const risk = from.state === "at-risk" || to.state === "at-risk" ? "high" as const : "moderate" as const;
-    deps.push({
-      from: from.id,
-      to: to.id,
-      risk,
-      reason: risk === "high" ? `${from.id} → ${to.id} coupling detected` : undefined,
-    });
-  }
-  return deps;
-}
-
-function buildMetrics(commitCount: number, totalLines: number): RepositoryAnalysis["metrics"] {
-  const deployCadence: RepositoryAnalysis["metrics"]["deployCadence"] = [];
-  const debtTrend: RepositoryAnalysis["metrics"]["debtTrend"] = [];
-  const now = new Date();
-
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(now.getDate() - i);
-    const date = d.toISOString().slice(0, 10);
-    const base = commitCount > 0 ? commitCount / 28 : Math.max(1, Math.round(totalLines / 1200));
-    const value = Math.max(0, Math.round(base * (0.6 + ((date.length + i) % 5) * 0.2)));
-    deployCadence.push({ date, value });
-  }
-
-  let debt = Math.min(400, Math.max(120, Math.round(90 + totalLines / 2000)));
-  for (const p of deployCadence) {
-    debt = Math.min(400, Math.max(120, debt + ((p.date.length + p.value) % 3) - 1));
-    debtTrend.push({ date: p.date, value: debt });
-  }
-
-  return { deployCadence, debtTrend };
 }
 
 function buildTechDebtItems(
   classifiedFiles: ClassifiedFile[],
-  _extLines: Record<string, number>,
 ): RepositoryAnalysis["techDebt"] {
-  const ranked = classifiedFiles
-    .filter((f) => f.category === "source" || f.category === "header")
+  // Only flag large source files (not fabricated risk scores)
+  const largeFiles = classifiedFiles
+    .filter((f) => (f.category === "source" || f.category === "header") && (f.loc ?? 0) > 500)
     .sort((a, b) => (b.loc ?? 0) - (a.loc ?? 0))
     .slice(0, 5);
 
-  return ranked.map((n, i) => {
-    const share = Math.min(95, 20 + (i * 17 + (n.path.length % 13)));
+  return largeFiles.map((n, i) => {
     const evidence: DebtEvidence[] = [
       { metric: "LOC", value: `${n.loc ?? "Unavailable"}`, label: "Lines of code" },
       { metric: "Size", value: `${(n.size / 1024).toFixed(1)} KB`, label: "File size" },
@@ -450,15 +381,14 @@ function buildTechDebtItems(
     if (n.language) {
       evidence.push({ metric: "Language", value: n.language, label: "File language" });
     }
-    // agingDebt is only shown when we have real git data
     return {
       id: `hotspot-${i}`,
       hotspot: n.path.split("/").slice(-1)[0],
-      riskScore: share,
+      riskScore: 0, // no evidence for scoring
       factors: [],
       agingDebt: "Unknown — git history not available",
       filePath: n.path,
-      detail: `Large file (${(n.size / 1024).toFixed(1)} KB) — flagged from repository scan`,
+      detail: `Large file (${(n.size / 1024).toFixed(1)} KB, ${n.loc ?? "?"} LOC) — flagged from repository scan`,
       evidence,
     };
   });

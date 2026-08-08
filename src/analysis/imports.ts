@@ -68,30 +68,74 @@ export function isInternalImport(importTarget: string): boolean {
 }
 
 /**
- * Parse Python imports from source text.
+ * Strip single-line comments from Python source text (before parsing).
+ * Also strips multi-line string literals used as docstrings/block comments.
  */
-export function parsePythonImports(sourceText: string, _sourceFile: string): ParsedImport[] {
-  const results: ParsedImport[] = [];
-  // Remove comments
-  const cleaned = sourceText.replace(/#.*$/gm, "");
+function stripPythonComments(text: string): string {
+  // Remove # comments (but not inside strings — approximate via line-based)
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let inTriple = false;
+  for (const line of lines) {
+    if (!inTriple) {
+      if (line.includes('"""') || line.includes("'''")) {
+        // Track triple-quote starts/stops
+        const tripleIdx = Math.max(
+          line.indexOf('"""') >= 0 ? line.indexOf('"""') : Infinity,
+          line.indexOf("'''") >= 0 ? line.indexOf("'''") : Infinity,
+        );
+        if (tripleIdx < Infinity) {
+          const beforeTriple = line.slice(0, tripleIdx);
+          const hashIdx = beforeTriple.indexOf("#");
+          result.push(hashIdx >= 0 ? beforeTriple.slice(0, hashIdx) : beforeTriple);
+          inTriple = !inTriple;
+          continue;
+        }
+      }
+      const hashIdx = line.indexOf("#");
+      result.push(hashIdx >= 0 ? line.slice(0, hashIdx) : line);
+    } else {
+      if (line.includes('"""') || line.includes("'''")) inTriple = !inTriple;
+      result.push("");
+    }
+  }
+  return result.join("\n");
+}
 
-  // import X, import X.Y.Z
-  const importRegex = /^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)/gm;
+/**
+ * Parse Python imports from source text.
+ * Correctly identifies local relative imports (from .xxx import Y).
+ */
+export function parsePythonImports(sourceText: string, sourceFile: string): ParsedImport[] {
+  const results: ParsedImport[] = [];
+  const cleaned = stripPythonComments(sourceText);
+
+  // Relative imports: from .module import X, from ..parent import Y
+  let relRe = /^\s*from\s+(\.+)([a-zA-Z_][\w.]*)?\s+import/gm;
   let match;
-  while ((match = importRegex.exec(cleaned)) !== null) {
-    const name = match[1].trim();
-    const topLevel = name.split(".")[0];
+  while ((match = relRe.exec(cleaned)) !== null) {
+    const dotCount = match[1].length;
+    const modPath = (match[2] ?? "").trim().replace(/\./g, "/");
+    const sourceDir = sourceFile.includes("/") ? sourceFile.slice(0, sourceFile.lastIndexOf("/")) : "";
+    const parts = sourceDir.split("/");
+    let remaining = dotCount;
+    while (remaining > 1 && parts.length > 0) {
+      parts.pop();
+      remaining--;
+    }
+    const resolvedDir = parts.join("/");
+    const resolvedPath = modPath ? `${resolvedDir}/${modPath}` : resolvedDir;
     results.push({
       raw: match[0].trim(),
-      name: topLevel,
-      isInternal: false, // Python imports are module-based
-      internalPath: topLevel,
+      name: resolvedPath,
+      isInternal: true,
+      internalPath: resolvedPath,
     });
   }
 
-  // from X import Y
-  const fromRegex = /^\s*from\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s+import/gm;
-  while ((match = fromRegex.exec(cleaned)) !== null) {
+  // import X, import X.Y.Z
+  const importRegex = /^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)/gm;
+  while ((match = importRegex.exec(cleaned)) !== null) {
     const name = match[1].trim();
     const topLevel = name.split(".")[0];
     results.push({
@@ -102,20 +146,87 @@ export function parsePythonImports(sourceText: string, _sourceFile: string): Par
     });
   }
 
+  // from X import Y (absolute imports — treat as external unless known otherwise)
+  const fromRegex = /^\s*from\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s+import/gm;
+  while ((match = fromRegex.exec(cleaned)) !== null) {
+    const name = match[1].trim();
+    const topLevel = name.split(".")[0];
+    results.push({
+      raw: match[0].trim(),
+      name: topLevel,
+      isInternal: false,
+      internalPath: undefined,
+    });
+  }
+
   return results;
 }
 
 /**
+ * Strip JS/TS-style comments from source text.
+ * Handles // single-line, /* * / block, and template literals.
+ */
+function stripJSTSComments(text: string): string {
+  // Remove // line comments (but not inside strings)
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let inBlockComment = false;
+  for (let line of lines) {
+    if (inBlockComment) {
+      const endIdx = line.indexOf("*/");
+      if (endIdx >= 0) {
+        line = line.slice(endIdx + 2);
+        inBlockComment = false;
+      } else {
+        result.push("");
+        continue;
+      }
+    }
+    // Remove /* ... */ block comments
+    let blockStart = line.indexOf("/*");
+    while (blockStart >= 0) {
+      const blockEnd = line.indexOf("*/", blockStart + 2);
+      if (blockEnd >= 0) {
+        line = line.slice(0, blockStart) + " " + line.slice(blockEnd + 2);
+      } else {
+        inBlockComment = true;
+        line = line.slice(0, blockStart);
+        break;
+      }
+      blockStart = line.indexOf("/*");
+    }
+    // Remove // line comments (but skip if inside a string)
+    // Simple approach: remove // that appears outside quotes
+    const segments = line.split('"');
+    for (let i = 0; i < segments.length; i++) {
+      if (i % 2 === 0) {
+        // Outside double-quote string — check for //
+        const slashIdx = segments[i].indexOf("//");
+        if (slashIdx >= 0) {
+          segments[i] = segments[i].slice(0, slashIdx);
+        }
+      }
+    }
+    line = segments.join('"');
+    result.push(line);
+  }
+  return result.join("\n");
+}
+
+/**
  * Parse JavaScript/TypeScript imports from source text.
+ * Handles comments and template literals.
  */
 export function parseTypeScriptImports(sourceText: string, _sourceFile: string): ParsedImport[] {
   const results: ParsedImport[] = [];
+  const cleaned = stripJSTSComments(sourceText);
 
   // import X from "Y"
   let re = /(?:import\s+(?:\{[^}]*\}\s*|(?:[\w*\s,]*))?\s*from\s*["']([^"']+)["'])/g;
   let match;
-  while ((match = re.exec(sourceText)) !== null) {
+  while ((match = re.exec(cleaned)) !== null) {
     const target = match[1];
+    if (!target) continue;
     const isInternal = isInternalImport(target);
     results.push({
       raw: match[0].trim(),
@@ -127,8 +238,9 @@ export function parseTypeScriptImports(sourceText: string, _sourceFile: string):
 
   // import "Y"
   re = /^\s*import\s+["']([^"']+)["']/gm;
-  while ((match = re.exec(sourceText)) !== null) {
+  while ((match = re.exec(cleaned)) !== null) {
     const target = match[1];
+    if (!target) continue;
     const isInternal = isInternalImport(target);
     results.push({
       raw: match[0].trim(),
@@ -140,8 +252,9 @@ export function parseTypeScriptImports(sourceText: string, _sourceFile: string):
 
   // require("Y")
   re = /(?:require|require\.resolve)\s*\(\s*["']([^"']+)["']\s*\)/g;
-  while ((match = re.exec(sourceText)) !== null) {
+  while ((match = re.exec(cleaned)) !== null) {
     const target = match[1];
+    if (!target) continue;
     const isInternal = isInternalImport(target);
     // Avoid duplicates
     if (!results.some((r) => r.name === target)) {

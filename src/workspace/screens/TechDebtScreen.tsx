@@ -51,8 +51,9 @@ export function TechDebtScreen() {
       </div>
 
       <p className="text-xs text-muted">
-        Risk scores are calculated from complexity, churn, coupling, file size, and contributor concentration.
+        Risk scores are calculated from structural complexity, churn, coupling, file size, and contributor concentration — each based on available evidence.
         Only source files are considered — documentation, config, and generated files are excluded.
+        Where evidence is insufficient, the score is marked as 0 with an "Unavailable" label.
       </p>
 
       {techDebt.length === 0 ? (

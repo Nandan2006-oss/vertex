@@ -76,7 +76,7 @@ export function OverviewScreen() {
         <StatCard
           label="Debt score"
           value={String(stats.currentDebt)}
-          note="current (composite heuristic)"
+          note="current (estimated from evidence)"
           state={stats.currentDebt > 340 ? "rust" : "emerald"}
         />
       </div>

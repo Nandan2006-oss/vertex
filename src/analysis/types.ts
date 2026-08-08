@@ -32,6 +32,8 @@ export interface ClassifiedFile {
   loc: number | null;
   /** If loc is estimated, this tells you how */
   locSource: "exact" | "estimated" | "unavailable";
+  /** Structural complexity estimate (null = not analyzed, 0 = trivial file) */
+  complexityEstimate: number | null;
 }
 
 export interface Service {

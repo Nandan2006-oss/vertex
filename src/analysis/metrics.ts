@@ -29,24 +29,51 @@ import type {
 import { RISK_WEIGHTS } from "./types";
 
 /**
+ * Strip JS/TS-style comments from source text (for complexity estimation).
+ */
+function stripCommentsForComplexity(text: string): string {
+  let result = text;
+  // Remove single-line comments (after stripping block comments first)
+  result = result.replace(/\/\/.*$/gm, "");
+  result = result.replace(/#.*$/gm, "");
+  // Remove block comments
+  result = result.replace(/\/\*[\s\S]*?\*\//g, "");
+  // Remove Python triple-quote strings that are docstrings
+  result = result.replace(/"""[\s\S]*?"""/g, "");
+  result = result.replace(/'''[\s\S]*?'''/g, "");
+  return result;
+}
+
+/**
  * Estimate structural complexity from source text.
  *
  * This is NOT formal cyclomatic complexity — it is a heuristic
- * based on keyword density. It should be labelled as an estimate.
+ * based on keyword density in actual code (comments are stripped first).
+ * It should be labelled as an estimate.
  */
-export function estimateComplexity(sourceText: string, _language: string | null): number {
+export function estimateComplexity(sourceText: string, language: string | null): number {
   if (!sourceText) return 0;
+  // Strip comments first so we don't count keywords inside comments
+  const codeOnly = stripCommentsForComplexity(sourceText);
   let score = 1;
 
-  const lower = sourceText.toLowerCase();
+  const lower = codeOnly.toLowerCase();
   const ifs = (lower.match(/\bif\b/g) ?? []).length;
   const fors = (lower.match(/\bfor\b/g) ?? []).length;
   const whiles = (lower.match(/\bwhile\b/g) ?? []).length;
   const switches = (lower.match(/\bswitch\b/g) ?? []).length;
   const cases = (lower.match(/\bcase\b/g) ?? []).length;
   const catches = (lower.match(/\bcatch\b/g) ?? []).length;
-  const andLogicals = (lower.match(/\band\b|\&\&/g) ?? []).length;
-  const orLogicals = (lower.match(/\bor\b|\|\|/g) ?? []).length;
+  const andLogicals = (lower.match(/\&\&/g) ?? []).length;
+  const orLogicals = (lower.match(/\|\|/g) ?? []).length;
+
+  // Python-specific: 'and' and 'or' as logical operators
+  if (language?.toLowerCase() === "python") {
+    const pythonAnd = (lower.match(/\band\b/g) ?? []).length;
+    const pythonOr = (lower.match(/\bor\b/g) ?? []).length;
+    // Subtract the 'and'/'or' that were already counted in /\&\&/ and /\|\|/
+    score += (pythonAnd + pythonOr);
+  }
 
   score += ifs + fors + whiles;
   score += switches + cases + catches;
@@ -263,12 +290,16 @@ export function buildContributorKnowledge(
  *
  * Every risk factor is traceable to real evidence.
  * Scores use RISK_WEIGHTS constants from types.ts (centralized).
+ *
+ * @param contributorCountMap Optional map of module name → real contributor count.
+ *        When not provided, contributor counts default to 0 and are labelled "Unavailable".
  */
 export function calculateModuleRisks(
   services: Service[],
   churn: ChurnRecord[],
   sourceFiles: ClassifiedFile[],
   realDependencies: RealDependency[],
+  contributorCountMap?: Map<string, number>,
 ): ModuleRisk[] {
   const totalChurn = churn.reduce((s, c) => s + c.totalCommits, 0) || 1;
 
@@ -281,9 +312,12 @@ export function calculateModuleRisks(
     const totalLOC = moduleSourceFiles.reduce((s, f) => s + (f.loc ?? 0), 0);
     const fileCount = moduleSourceFiles.length;
 
-    // Structural complexity estimate (NOT cyclomatic complexity)
-    const avgComplexity = fileCount > 0
-      ? Math.round((totalLOC / fileCount) * 0.15 + 1)
+    // Structural complexity: use REAL per-file complexity estimates when available
+    const validComplexities = moduleSourceFiles
+      .map((f) => f.complexityEstimate)
+      .filter((c): c is number => c !== null);
+    const avgComplexity = validComplexities.length > 0
+      ? Math.round(validComplexities.reduce((s, c) => s + c, 0) / validComplexities.length)
       : 0;
 
     // Churn for this module
@@ -302,7 +336,9 @@ export function calculateModuleRisks(
     const dependencyCount = depsFromModule.length;
     const dependentCount = depsToModule.length;
 
-    const contributorCount = Math.max(1, Math.round(svc.commits30d / 3 + 1));
+    // REAL contributor count (from actual git authors), or 0 if unavailable
+    const contributorCount = contributorCountMap?.get(svc.id) ?? 0;
+    const hasContributorData = contributorCount > 0 || !!contributorCountMap;
 
     // Risk score with evidence factors
     let score = 0;
@@ -313,22 +349,25 @@ export function calculateModuleRisks(
     const complexityFactor = Math.min(1, avgComplexity / 30);
     const complexityContribution = Math.round(complexityFactor * RISK_WEIGHTS.complexity);
     score += complexityContribution;
+    const hasComplexityMetric = validComplexities.length > 0;
     factors.push({
       name: "Complexity",
-      contribution: complexityContribution,
+      contribution: hasComplexityMetric ? complexityContribution : 0,
       evidence: {
         metric: "Structural complexity estimate",
-        value: avgComplexity,
-        label: "Estimated structural complexity",
-        explanation: avgComplexity > 15
-          ? `High complexity estimate (${avgComplexity}) — above typical module threshold`
-          : avgComplexity > 8
-            ? `Moderate complexity estimate (${avgComplexity})`
-            : `Low complexity estimate (${avgComplexity})`,
-        confidence: avgComplexity > 0 ? "medium" : "low",
+        value: hasComplexityMetric ? avgComplexity : "Unavailable",
+        label: "Estimated structural complexity (keyword density)",
+        explanation: hasComplexityMetric
+          ? avgComplexity > 15
+            ? `High complexity estimate (${avgComplexity}) — above typical module threshold`
+            : avgComplexity > 8
+              ? `Moderate complexity estimate (${avgComplexity})`
+              : `Low complexity estimate (${avgComplexity})`
+          : "Complexity analysis unavailable — file contents not deeply analyzed",
+        confidence: hasComplexityMetric ? "medium" : "low",
       },
     });
-    if (complexityFactor > 0.5) {
+    if (complexityFactor > 0.5 && hasComplexityMetric) {
       reasons.push(`Estimated structural complexity: ${avgComplexity} — above average`);
     }
 
@@ -378,40 +417,44 @@ export function calculateModuleRisks(
 
     // Factor 4: Size
     const sizeFactor = Math.min(1, totalLOC / 3000);
-    const sizeContribution = Math.round(sizeFactor * RISK_WEIGHTS.size);
+    const sizeContribution = totalLOC > 0 ? Math.round(sizeFactor * RISK_WEIGHTS.size) : 0;
     score += sizeContribution;
     factors.push({
       name: "Size",
       contribution: sizeContribution,
       evidence: {
         metric: "Lines of code",
-        value: totalLOC,
+        value: totalLOC > 0 ? totalLOC : "Unavailable",
         label: "Total LOC in module",
-        explanation: `${totalLOC} LOC across ${fileCount} files`,
+        explanation: totalLOC > 0
+          ? `${totalLOC} LOC across ${fileCount} files`
+          : "Line counts unavailable — files not deeply analyzed",
         confidence: totalLOC > 0 ? "high" : "medium",
       },
     });
-    if (sizeFactor > 0.5) {
+    if (sizeFactor > 0.5 && totalLOC > 0) {
       reasons.push(`${totalLOC} LOC across ${fileCount} files — large module`);
     }
 
-    // Factor 5: Bus factor
-    const busFactorContribution = (contributorCount <= 2 && fileCount > 3) ? RISK_WEIGHTS.busFactor : 0;
+    // Factor 5: Bus factor (only meaningful with real contributor data)
+    const busFactorContribution = hasContributorData && (contributorCount <= 2 && fileCount > 3) ? RISK_WEIGHTS.busFactor : 0;
     score += busFactorContribution;
     factors.push({
       name: "Bus factor",
       contribution: busFactorContribution,
       evidence: {
         metric: "Contributor count",
-        value: contributorCount,
-        label: "Number of contributors",
-        explanation: contributorCount <= 2 && fileCount > 3
-          ? `Only ${contributorCount} contributor(s) for ${fileCount} files — knowledge may be concentrated`
-          : `${contributorCount} contributors — adequate diversity`,
-        confidence: contributorCount > 0 ? "high" : "medium",
+        value: hasContributorData ? contributorCount : "Unavailable",
+        label: "Number of unique contributors (from git history)",
+        explanation: !hasContributorData
+          ? "Contributor data unavailable — git history not deeply analyzed"
+          : contributorCount <= 2 && fileCount > 3
+            ? `Only ${contributorCount} contributor(s) for ${fileCount} files — knowledge may be concentrated`
+            : `${contributorCount} contributors — adequate diversity`,
+        confidence: hasContributorData ? "high" : "low",
       },
     });
-    if (contributorCount <= 2 && fileCount > 3) {
+    if (hasContributorData && contributorCount <= 2 && fileCount > 3) {
       reasons.push(`Only ${contributorCount} contributor(s) — bus factor concern`);
     }
 
@@ -437,7 +480,7 @@ export function calculateModuleRisks(
       churn: moduleChurnCount,
       dependencyCount,
       dependentCount,
-      contributorCount,
+      contributorCount: hasContributorData ? contributorCount : 0,
       isGodModule,
       reasons: reasons.slice(0, 5),
     };
@@ -467,9 +510,9 @@ export function buildTechDebt(
     if (mr.riskScore < 25) continue;
 
     const evidence: DebtEvidence[] = [
-      { metric: "Risk Score", value: `${mr.riskScore}/100`, label: "Combined risk score (composite heuristic)" },
+      { metric: "Risk Score", value: `${mr.riskScore}/100`, label: "Combined risk score from complexity, churn, coupling, size, and bus factor" },
       { metric: "LOC", value: `${mr.loc}`, label: "Lines of code" },
-      { metric: "Complexity Estimate", value: mr.complexityEstimate.toFixed(1), label: "Structural complexity estimate" },
+      { metric: "Complexity Estimate", value: mr.complexityEstimate.toFixed(1), label: "Structural complexity estimate (keyword density)" },
       { metric: "Churn", value: `${mr.churn} commits`, label: "Historical commit count" },
     ];
     if (mr.dependencyCount > 0) {
@@ -553,7 +596,7 @@ export function buildTechDebt(
     items.push({
       id: `debt-file-${ch.filePath.replace(/[^a-z0-9]/gi, "-")}`,
       hotspot: ch.filePath.split("/").pop() ?? ch.filePath,
-      riskScore: Math.min(90, 25 + ch.totalCommits * 3 + ((fileInfo.loc ?? 0) > 200 ? 10 : 0)),
+      riskScore: Math.min(85, 15 + ch.totalCommits * 2),
       factors: [],
       agingDebt: ch.firstChanged
         ? `${Math.round((Date.now() - new Date(ch.firstChanged).getTime()) / (1000 * 60 * 60 * 24))} days`
@@ -595,7 +638,7 @@ export function generateEvidence(
       insight: `"${top.moduleName}" is the highest-risk module in this codebase.`,
       source: "Static Analysis + Git History",
       facts: [
-        `Risk score: ${top.riskScore}/100 (composite heuristic)`,
+        `Risk score: ${top.riskScore}/100 (derived from complexity, churn, coupling, size, and bus factor)`,
         `Factors: ${factorDetails}`,
         `${top.loc} lines of code across ${top.fileCount} files`,
         `Estimated structural complexity: ${top.complexityEstimate}`,
