@@ -224,6 +224,7 @@ export async function analyzeLocalRepository(
 
   // Reread source files that support import parsing, now that we have classifiedFiles populated
   const importableCount = sourceFiles.filter((f) => detectImportParser(f.path) !== null).length;
+  const sourceFilesSkipped = sourceFiles.length - importableCount;
   let importParsed = 0;
 
   for (const file of sorted) {
@@ -351,7 +352,10 @@ export async function analyzeLocalRepository(
     analyzedFiles: fileNodes.length,
     sourceFilesTotal: sourceFiles.length,
     sourceFilesAnalyzed: fileContents.size,
+    sourceFilesSkipped,
+    sourceFilesFailed: 0,
     totalCommits: commitCount,
+    totalCommitsReliable: true,
     commitsAnalyzed: 0,
     totalContributors: contributors.length,
     analyzedContributors: contributors.length,

@@ -66,6 +66,19 @@ export function ArchitectureGraph({
   interactive = true,
   className,
 }: ArchitectureGraphProps) {
+  // Build ONE validated link collection synchronously — every link must have
+  // a valid source AND target node in the services array. The same collection
+  // is used for D3 simulation, SVG <line> elements, link refs, and event
+  // handling — never a second unvalidated array.
+  const nodeIds = new Set(services.map((s) => s.id));
+  const validatedLinks: GraphLink[] = dependencies
+    .map((d) => ({ source: d.from, target: d.to, risk: d.risk }))
+    .filter(
+      (l) =>
+        nodeIds.has(l.source as string) &&
+        nodeIds.has(l.target as string),
+    );
+
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const linkRefs = useRef<(SVGLineElement | null)[]>([]);
@@ -104,17 +117,6 @@ export function ArchitectureGraph({
         y: size.height / 2 + Math.sin(angle) * 110,
       };
     });
-
-    // Build ONE validated link collection — every link must have a valid
-    // source AND target node. This same collection is used for D3 simulation,
-    // SVG rendering, and event handling — never a second unvalidated array.
-    const validatedLinks: GraphLink[] = dependencies
-      .map((d) => ({ source: d.from, target: d.to, risk: d.risk }))
-      .filter(
-        (l) =>
-          nodes.some((n) => n.id === (l.source as string)) &&
-          nodes.some((n) => n.id === (l.target as string)),
-      );
 
     const sim: Simulation<GraphNode, GraphLink> = forceSimulation(nodes)
       .force(
@@ -214,12 +216,14 @@ export function ArchitectureGraph({
         style={{ height }}
       >
         {/* Links — using validatedLinks that are also in the D3 sim */}
-        {dependencies.map((d, i) => {
-          const risky = d.risk === "high";
-          const moderate = d.risk === "moderate";
+        {validatedLinks.map((l, i) => {
+          const risky = l.risk === "high";
+          const moderate = l.risk === "moderate";
+          const fromId = l.source as string;
+          const toId = l.target as string;
           return (
             <line
-              key={`${d.from}→${d.to}`}
+              key={`${fromId}→${toId}`}
               ref={(el) => {
                 linkRefs.current[i] = el;
               }}

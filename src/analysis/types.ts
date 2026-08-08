@@ -253,6 +253,10 @@ export interface AnalysisCoverage {
     sourceFilesTotal: number;
     /** Source files that were actually deeply parsed */
     sourceFilesAnalyzed: number;
+    /** Source files not deeply parsed (e.g. no import parser available) */
+    sourceFilesSkipped: number;
+    /** Source files where content fetch or parsing failed */
+    sourceFilesFailed: number;
     status: CoverageStatus;
   };
   /** Git history coverage */

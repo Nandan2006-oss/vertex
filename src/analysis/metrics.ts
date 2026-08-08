@@ -867,7 +867,11 @@ export function buildCoverage(params: {
   analyzedFiles: number;
   sourceFilesTotal: number;
   sourceFilesAnalyzed: number;
+  sourceFilesSkipped: number;
+  sourceFilesFailed: number;
   totalCommits: number;
+  /** When false, totalCommits should not be trusted as a reliable ceiling */
+  totalCommitsReliable: boolean;
   commitsAnalyzed: number;
   totalContributors: number;
   analyzedContributors: number;
@@ -879,7 +883,10 @@ export function buildCoverage(params: {
     analyzedFiles,
     sourceFilesTotal,
     sourceFilesAnalyzed,
+    sourceFilesSkipped,
+    sourceFilesFailed,
     totalCommits,
+    totalCommitsReliable,
     commitsAnalyzed,
     totalContributors,
     analyzedContributors,
@@ -887,7 +894,10 @@ export function buildCoverage(params: {
     historyEnd,
   } = params;
 
-  const historyPct = totalCommits > 0 ? commitsAnalyzed / totalCommits : 0;
+  // For confidence, only use totalCommits when it's reliable
+  const commitsForConfidence = totalCommitsReliable ? totalCommits : commitsAnalyzed;
+  const commitCeil = totalCommitsReliable ? totalCommits : 0;
+  const historyPct = commitCeil > 0 ? commitsAnalyzed / commitCeil : 0;
   const filePct = totalFiles > 0 ? analyzedFiles / totalFiles : 0;
   const depPct = sourceFilesTotal > 0 ? sourceFilesAnalyzed / sourceFilesTotal : 0;
 
@@ -912,11 +922,22 @@ export function buildCoverage(params: {
     : sourceFilesAnalyzed > 0 ? "partial"
     : "unavailable";
 
-  const historyStatus: CoverageStatus =
-    totalCommits === 0 ? "unavailable"
-    : commitsAnalyzed >= totalCommits ? "complete"
-    : commitsAnalyzed > 0 ? "partial"
-    : "unavailable";
+  // History: never assume completeness from missing metadata
+  let historyStatus: CoverageStatus;
+  let historyComplete = false;
+  if (!totalCommitsReliable && commitsAnalyzed > 0) {
+    // GitHub did not provide a reliable total — we cannot prove completeness
+    historyStatus = "unavailable";
+  } else if (totalCommits === 0) {
+    historyStatus = "unavailable";
+  } else if (commitsAnalyzed >= totalCommits) {
+    historyStatus = "complete";
+    historyComplete = true;
+  } else if (commitsAnalyzed > 0) {
+    historyStatus = "partial";
+  } else {
+    historyStatus = "unavailable";
+  }
 
   const contribStatus: CoverageStatus =
     totalContributors === 0 ? "unavailable"
@@ -926,8 +947,10 @@ export function buildCoverage(params: {
 
   // Build an honest history label
   let historyLabel: string;
-  if (totalCommits === 0) {
+  if (commitsAnalyzed === 0) {
     historyLabel = "Git history not available";
+  } else if (!totalCommitsReliable) {
+    historyLabel = `Completeness unknown — ${commitsAnalyzed} commits analyzed`;
   } else if (commitsAnalyzed >= totalCommits) {
     historyLabel = `Full available history analyzed (${commitsAnalyzed} commits)`;
   } else if (historyStatus === "partial") {
@@ -955,16 +978,18 @@ export function buildCoverage(params: {
     dependencies: {
       sourceFilesTotal,
       sourceFilesAnalyzed,
+      sourceFilesSkipped,
+      sourceFilesFailed,
       status: depStatus,
     },
     history: {
-      totalCommits,
+      totalCommits: totalCommitsReliable ? totalCommits : commitsForConfidence,
       commitsAnalyzed,
       label: historyLabel,
       historyStart,
       historyEnd,
       historyDays,
-      historyComplete: historyStatus === "complete",
+      historyComplete,
       status: historyStatus,
     },
     contributors: {

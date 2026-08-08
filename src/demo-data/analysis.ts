@@ -352,6 +352,8 @@ export const demoAnalysis: RepositoryAnalysis = {
     dependencies: {
       sourceFilesTotal: sourceFiles.length,
       sourceFilesAnalyzed: sourceFiles.length,
+      sourceFilesSkipped: 0,
+      sourceFilesFailed: 0,
       status: "complete",
     },
     history: {

@@ -85,11 +85,6 @@ interface GhFileChange {
   previous_filename?: string;
 }
 
-interface GhContributor {
-  login: string;
-  contributions: number;
-}
-
 interface GhTreeItem {
   path: string;
   mode: string;
@@ -340,6 +335,7 @@ export async function analyzeGithubRepository(
   const BATCH_SIZE = 15;
   const fileContents = new Map<string, string>();
   const contentHashes = new Set<string>();
+  let sourceFilesFailed = 0;
 
   for (let batchStart = 0; batchStart < filesToAnalyze.length; batchStart += BATCH_SIZE) {
     if (signal?.aborted) break;
@@ -369,6 +365,8 @@ export async function analyzeGithubRepository(
           contentHashes.add(hash);
           fileContents.set(path, content);
         }
+      } else {
+        sourceFilesFailed++;
       }
     }
   }
@@ -498,7 +496,7 @@ export async function analyzeGithubRepository(
   }
 
   const fetchedCommitCount = allCommitShas.length;
-  const historyComplete = fetchedCommitCount >= totalCommitCount || totalCommitCount === 0;
+  const totalCommitCountReliable = fetchedCommitCount < MAX_HISTORY_COMMITS && totalCommitCount > 0;
 
   // Fetch detailed commits with bounded concurrency
   const commitFetchItems = allCommitShas.map((sha) => ({
@@ -554,44 +552,34 @@ export async function analyzeGithubRepository(
   // STAGE 4 — CONTRIBUTORS
   // ════════════════════════════════════════════════════════════
 
-  onProgress({ fraction: 0.73, stage: "Analyzing contributors", detail: "Fetching contributor data" });
+  onProgress({ fraction: 0.73, stage: "Analyzing contributors", detail: "Deriving from commit authors" });
 
   let contributors: Contributor[] = [];
   let contributorCount = 0;
 
-  try {
-    const contributorsData = (await ghFetch(
-      `/repos/${owner}/${repo}/contributors?per_page=15`,
-      signal,
-    )) as GhContributor[];
-
-    const totalContributions = contributorsData.reduce((s, c) => s + c.contributions, 0) || 1;
-    contributors = contributorsData.map((c) => ({
-      name: c.login,
-      commits: c.contributions,
-      percentage: Math.round((c.contributions / totalContributions) * 100),
-    }));
-    contributorCount = contributorsData.length;
-  } catch {
-    // Fall back to commit authors
-    contributorCount = authorSet.size;
-    contributors = [...authorSet].map((name) => ({
-      name,
-      commits: commits.filter((c) => c.author === name).length,
-      percentage: 0,
-    }));
-    const total = contributors.reduce((s, c) => s + c.commits, 0) || 1;
-    contributors = contributors.map((c) => ({
-      ...c,
-      percentage: Math.round((c.commits / total) * 100),
-    }));
+  // Derive contributor identity from the analyzed commit authors — NOT from
+  // the GitHub contributors endpoint which may silently cap results. This
+  // gives us the true count of distinct authors seen in the fetched history.
+  const authorCounts = new Map<string, number>();
+  for (const c of commits) {
+    authorCounts.set(c.author, (authorCounts.get(c.author) ?? 0) + 1);
   }
+  contributorCount = authorSet.size;
 
-  const coverageNote = historyComplete
-    ? ` (full history)`
-    : ` (partial — fetched ${commitsAnalyzed} of ~${totalCommitCount} commits)`;
-  checks.push(`✓ ${contributorCount} contributors${coverageNote}`);
-  checks.push(`✓ ${commitsAnalyzed} commits analyzed${!historyComplete ? ` of ~${totalCommitCount} total` : ""}`);
+  contributors = [...authorCounts.entries()]
+    .map(([name, cnt]) => ({ name, commits: cnt, percentage: 0 }))
+    .sort((a, b) => b.commits - a.commits);
+  const totalContribs = contributors.reduce((s, c) => s + c.commits, 0);
+  contributors = contributors.map((c) => ({
+    ...c,
+    percentage: totalContribs > 0 ? Math.round((c.commits / totalContribs) * 100) : 0,
+  }));
+
+  const historyLabel = totalCommitCountReliable && totalCommitCount > 0
+    ? ` (fetched ${commitsAnalyzed} of ~${totalCommitCount} commits)`
+    : ` (${commitsAnalyzed} commits analyzed)`;
+  checks.push(`✓ ${contributorCount} contributors${historyLabel}`);
+  checks.push(`✓ ${commitsAnalyzed} commits analyzed${totalCommitCountReliable ? ` of ~${totalCommitCount} total` : ""}`);
 
   // ════════════════════════════════════════════════════════════
   // STAGE 5 — BUILD DERIVED MODELS
@@ -646,7 +634,9 @@ export async function analyzeGithubRepository(
     services, moduleRisks, allExternalLibs, framework, contributorKnowledge, sourceFiles,
   );
 
-  // Build coverage report
+  // Build coverage report — each metric reports how much was actually examined.
+  // Never conflate "discovered" with "analyzed".
+  const sourceFilesSkipped = sourceFiles.length - filesToAnalyze.length;
   const oldestCommit = commits.length > 0
     ? commits.reduce((a, b) => a.date < b.date ? a : b)
     : null;
@@ -655,12 +645,15 @@ export async function analyzeGithubRepository(
     : null;
   const coverage = buildCoverage({
     totalFiles: fileCount,
-    analyzedFiles: fileCount,
+    analyzedFiles: fileContents.size,
     sourceFilesTotal: sourceFiles.length,
     sourceFilesAnalyzed: fileContents.size,
-    totalCommits: Math.max(totalCommitCount, commitsAnalyzed),
+    sourceFilesSkipped,
+    sourceFilesFailed,
+    totalCommits: totalCommitCountReliable ? totalCommitCount : 0,
+    totalCommitsReliable: totalCommitCountReliable,
     commitsAnalyzed,
-    totalContributors: Math.max(contributorCount, authorSet.size),
+    totalContributors: contributorCount,
     analyzedContributors: contributorCount,
     historyStart: oldestCommit?.date,
     historyEnd: newestCommit?.date,
@@ -680,7 +673,7 @@ export async function analyzeGithubRepository(
     description,
     complete: true,
     analyzedAt: new Date().toISOString(),
-    commitCount: Math.max(totalCommitCount, commitsAnalyzed),
+    commitCount: totalCommitCountReliable ? totalCommitCount : commitsAnalyzed,
     contributorCount,
     fileCount,
     totalLines,
