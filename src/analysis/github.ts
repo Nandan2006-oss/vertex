@@ -45,6 +45,16 @@ const USER_AGENT = "Vertex/1.0";
 /** Maximum concurrent GitHub API requests */
 const CONCURRENCY_LIMIT = 5;
 
+/** Page size for commit history API requests */
+const COMMITS_PER_PAGE = 100;
+
+/**
+ * Maximum commits to fetch from GitHub history.
+ * This prevents unbounded downloads while still retrieving enough
+ * data for meaningful historical analysis.
+ */
+const MAX_HISTORY_COMMITS = 5000;
+
 interface GhRepo {
   name: string;
   full_name: string;
@@ -444,7 +454,7 @@ export async function analyzeGithubRepository(
 
   onProgress({ fraction: 0.56, stage: "Fetching Git history", detail: "Retrieving commit list" });
 
-  // Get approximate total commit count
+  // Get approximate total commit count from pagination headers
   let totalCommitCount = 0;
   try {
     const commitCountResponse = await fetch(
@@ -458,15 +468,42 @@ export async function analyzeGithubRepository(
     totalCommitCount = 0;
   }
 
-  const commitListData = (await ghFetch(
-    `/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=30`,
-    signal,
-  )) as { sha: string }[];
+  // Paginate through commit list — use COMMITS_PER_PAGE and MAX_HISTORY_COMMITS
+  const allCommitShas: string[] = [];
+  let pagesFetched = 0;
+  const maxPages = Math.ceil(MAX_HISTORY_COMMITS / COMMITS_PER_PAGE);
+
+  outer:
+  for (let page = 1; page <= maxPages; page++) {
+    if (signal?.aborted) break;
+    onProgress({
+      fraction: 0.56 + (page / maxPages) * 0.15,
+      stage: "Fetching Git history",
+      detail: `Listing commits page ${page}...`,
+    });
+    try {
+      const pageData = await ghFetch(
+        `/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=${COMMITS_PER_PAGE}&page=${page}`,
+        signal,
+      ) as { sha: string }[];
+      if (!Array.isArray(pageData) || pageData.length === 0) break;
+      for (const c of pageData) {
+        allCommitShas.push(c.sha);
+        if (allCommitShas.length >= MAX_HISTORY_COMMITS) break outer;
+      }
+      pagesFetched++;
+    } catch {
+      break;
+    }
+  }
+
+  const fetchedCommitCount = allCommitShas.length;
+  const historyComplete = fetchedCommitCount >= totalCommitCount || totalCommitCount === 0;
 
   // Fetch detailed commits with bounded concurrency
-  const commitFetchItems = commitListData.slice(0, 30).map((c) => ({
-    key: c.sha,
-    fetcher: () => ghFetch(`/repos/${owner}/${repo}/commits/${c.sha}`, signal) as Promise<GhCommit>,
+  const commitFetchItems = allCommitShas.map((sha) => ({
+    key: sha,
+    fetcher: () => ghFetch(`/repos/${owner}/${repo}/commits/${sha}`, signal) as Promise<GhCommit>,
   }));
 
   const commitResults = await concurrentFetch(
@@ -474,9 +511,9 @@ export async function analyzeGithubRepository(
     CONCURRENCY_LIMIT,
     (sha, idx, total) => {
       onProgress({
-        fraction: 0.56 + (idx / total) * 0.15,
+        fraction: 0.56 + 0.15 + (idx / Math.max(1, total)) * 0.02,
         stage: "Fetching Git history",
-        detail: `Commit ${idx + 1} of ${total}`,
+        detail: `Commit details ${idx + 1} of ${total}`,
       });
       void sha;
     },
@@ -550,11 +587,11 @@ export async function analyzeGithubRepository(
     }));
   }
 
-  const coverageNote = totalCommitCount > commitsAnalyzed
-    ? ` (partial — based on first ${commitsAnalyzed} commits)`
-    : "";
+  const coverageNote = historyComplete
+    ? ` (full history)`
+    : ` (partial — fetched ${commitsAnalyzed} of ~${totalCommitCount} commits)`;
   checks.push(`✓ ${contributorCount} contributors${coverageNote}`);
-  checks.push(`✓ ${commitsAnalyzed} commits analyzed${totalCommitCount > commitsAnalyzed ? ` of ~${totalCommitCount} total` : ""}`);
+  checks.push(`✓ ${commitsAnalyzed} commits analyzed${!historyComplete ? ` of ~${totalCommitCount} total` : ""}`);
 
   // ════════════════════════════════════════════════════════════
   // STAGE 5 — BUILD DERIVED MODELS
@@ -851,11 +888,11 @@ function buildMetrics(
   commits: Commit[],
   debtMarkers: { count: number; files: number },
 ): RepositoryAnalysis["metrics"] {
-  const deployCadence: RepositoryAnalysis["metrics"]["deployCadence"] = [];
+  const commitActivity: RepositoryAnalysis["metrics"]["commitActivity"] = [];
   const debtTrend: RepositoryAnalysis["metrics"]["debtTrend"] = [];
   const now = new Date();
 
-  // Build daily commit cadence for the last 14 days (REAL data)
+  // Build daily commit counts for the last 14 days (REAL data from git history)
   const dayCount = new Map<string, number>();
   for (const c of commits) {
     const day = c.date.slice(0, 10);
@@ -867,7 +904,7 @@ function buildMetrics(
     d.setDate(now.getDate() - i);
     const date = d.toISOString().slice(0, 10);
     const commitsOnDay = dayCount.get(date) ?? 0;
-    deployCadence.push({
+    commitActivity.push({
       date,
       value: Math.max(0, commitsOnDay),
     });
@@ -877,11 +914,11 @@ function buildMetrics(
   // Each marker found = 1 debt point. No arbitrary multipliers or fabrications.
   if (debtMarkers.count > 0) {
     const markerDebt = debtMarkers.count;
-    for (const point of deployCadence) {
+    for (const point of commitActivity) {
       debtTrend.push({ date: point.date, value: markerDebt });
     }
   }
   // If no markers found, debtTrend stays empty — "No evidence of debt markers found."
 
-  return { deployCadence, debtTrend };
+  return { commitActivity, debtTrend };
 }

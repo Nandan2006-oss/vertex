@@ -18,10 +18,10 @@ export function OverviewScreen() {
     const configCount = classifiedFiles.find((c) => c.category === "config")?.count ?? 0;
     const totalServices = services.length;
     const avgCommits =
-      metrics.deployCadence.length > 0
+      metrics.commitActivity.length > 0
         ? Math.round(
-            metrics.deployCadence.reduce((s, p) => s + p.value, 0) /
-              metrics.deployCadence.length,
+            metrics.commitActivity.reduce((s, p) => s + p.value, 0) /
+              metrics.commitActivity.length,
           )
         : 0;
     const currentDebt =
@@ -89,9 +89,9 @@ export function OverviewScreen() {
         />
       </div>
 
-      {/* Coverage indicator */}
+      {/* Coverage indicator — shows separate metrics with honest status */}
       <div className="rounded-sm border border-border bg-surface px-4 py-2">
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
           <span className="text-secondary">Analysis coverage:</span>
           <span className={`font-medium ${
             coverage.confidence === "high" ? "text-emerald" :
@@ -100,18 +100,17 @@ export function OverviewScreen() {
             {stats.confidenceLabel}
           </span>
           <span className="text-muted">|</span>
-          <span className="text-muted">{coverage.history.label}</span>
+          <StatusBadge status={coverage.history.status} label={coverage.history.label} />
           <span className="text-muted">|</span>
-          <span className="text-muted" title={`${coverage.files.analyzed} of ${coverage.files.total} total files scanned`}>
-            Files: {coverage.files.analyzed} / {coverage.files.total}
-          </span>
+          <StatusBadge
+            status={coverage.files.status}
+            label={`Files: ${coverage.files.analyzed} / ${coverage.files.total}`}
+          />
           <span className="text-muted">|</span>
-          <span className="text-muted" title={`Deep dependency analysis: ${stats.depFilesAnalyzed} of ${stats.depFilesTotal} source files`}>
-            Deep analysis: {stats.depFilesAnalyzed} / {stats.depFilesTotal}
-            {stats.depFilesTotal > 0 && stats.deepAnalysisPct < 100 && (
-              <span className="ml-1">({stats.deepAnalysisPct}%)</span>
-            )}
-          </span>
+          <StatusBadge
+            status={coverage.dependencies.status}
+            label={`Deep analysis: ${stats.depFilesAnalyzed} / ${stats.depFilesTotal}`}
+          />
         </div>
       </div>
 
@@ -194,15 +193,15 @@ export function OverviewScreen() {
 
       {/* Sparklines — only render when data exists */}
       <div className="grid grid-cols-2 gap-4">
-        {metrics.deployCadence.length > 0 ? (
+        {metrics.commitActivity.length > 0 ? (
           <SparklineCard
-            title="Commit cadence"
-            data={metrics.deployCadence.map((p) => p.value)}
+            title="Commit activity"
+            data={metrics.commitActivity.map((p) => p.value)}
             color="var(--color-emerald)"
           />
         ) : (
           <div className="rounded-sm border border-border bg-surface px-4 py-3">
-            <h3 className="mb-1 text-xs text-secondary">Commit cadence</h3>
+            <h3 className="mb-1 text-xs text-secondary">Commit activity</h3>
             <p className="text-xs text-muted">Insufficient data — commit history not available</p>
           </div>
         )}
@@ -280,6 +279,25 @@ export function OverviewScreen() {
   );
 }
 
+/* ── Coverage status badge ──────────────────────────────────────── */
+
+function StatusBadge({ status, label }: { status: string; label: string }) {
+  const colorMap: Record<string, string> = {
+    complete: "text-emerald",
+    partial: "text-amber",
+    unavailable: "text-muted",
+    failed: "text-rust",
+  };
+  return (
+    <span
+      className={`${colorMap[status] ?? "text-muted"}`}
+      title={`Coverage: ${status}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 /* ── Sub-components ────────────────────────────────────────────── */
 
 function StatCard({
@@ -319,7 +337,7 @@ function RiskyModuleCard({ risk }: { risk: ModuleRisk }) {
         <span className="font-mono text-sm font-medium text-foreground">{risk.moduleName}</span>
         <div className="flex items-center gap-2">
           <span
-            title="Composite heuristic risk score"
+            title="Risk score — heuristic based on observed repository evidence"
             className="inline-flex items-center gap-1 rounded-sm bg-rust/10 px-1.5 py-0.5 text-xs font-medium text-rust"
           >
             {risk.riskScore}/100
@@ -354,7 +372,7 @@ function RiskyModuleCard({ risk }: { risk: ModuleRisk }) {
           {risk.factors.filter(f => f.contribution > 0).map((f, i) => (
             <span
               key={i}
-              title={f.evidence.explanation}
+              title={`${f.evidence.metric}: ${f.evidence.value} — ${f.evidence.explanation}`}
               className="rounded-sm bg-raised px-1.5 py-0.5 text-[10px] text-muted"
             >
               {f.name}: +{f.contribution}

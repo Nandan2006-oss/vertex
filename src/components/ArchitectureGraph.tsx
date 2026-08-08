@@ -105,7 +105,10 @@ export function ArchitectureGraph({
       };
     });
 
-    const links: GraphLink[] = dependencies
+    // Build ONE validated link collection — every link must have a valid
+    // source AND target node. This same collection is used for D3 simulation,
+    // SVG rendering, and event handling — never a second unvalidated array.
+    const validatedLinks: GraphLink[] = dependencies
       .map((d) => ({ source: d.from, target: d.to, risk: d.risk }))
       .filter(
         (l) =>
@@ -116,7 +119,7 @@ export function ArchitectureGraph({
     const sim: Simulation<GraphNode, GraphLink> = forceSimulation(nodes)
       .force(
         "link",
-        forceLink<GraphNode, GraphLink>(links)
+        forceLink<GraphNode, GraphLink>(validatedLinks)
           .id((d) => d.id)
           .distance(120)
           .strength(0.6),
@@ -129,13 +132,12 @@ export function ArchitectureGraph({
 
     const render = () => {
       linkRefs.current.forEach((line, i) => {
-        const l = links[i] as GraphLink & {
+        const l = validatedLinks[i] as GraphLink & {
           source: GraphNode;
           target: GraphNode;
         };
         if (!line) return;
-        if (l.source.x === undefined || l.source.x === null) return;
-        if (l.target.x === undefined || l.target.x === null) return;
+        if (l.source.x == null || l.target.x == null) return;
         line.setAttribute("x1", String(l.source.x));
         line.setAttribute("y1", String(l.source.y));
         line.setAttribute("x2", String(l.target.x));
@@ -144,8 +146,7 @@ export function ArchitectureGraph({
       nodeRefs.current.forEach((g, i) => {
         const n = nodes[i];
         if (!g) return;
-        if (n.x === undefined || n.x === null) return;
-        if (n.y === undefined || n.y === null) return;
+        if (n.x == null || n.y == null) return;
         g.setAttribute(
           "transform",
           `translate(${n.x.toFixed(1)}, ${n.y.toFixed(1)})`,
@@ -212,7 +213,7 @@ export function ArchitectureGraph({
         className="block w-full"
         style={{ height }}
       >
-        {/* Links */}
+        {/* Links — using validatedLinks that are also in the D3 sim */}
         {dependencies.map((d, i) => {
           const risky = d.risk === "high";
           const moderate = d.risk === "moderate";

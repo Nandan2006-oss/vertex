@@ -157,7 +157,8 @@ export interface MetricPoint {
 }
 
 export interface Metrics {
-  deployCadence: MetricPoint[];
+  /** Daily commit counts — from git history, NOT deployments */
+  commitActivity: MetricPoint[];
   debtTrend: MetricPoint[];
 }
 
@@ -223,8 +224,19 @@ export interface ContributorKnowledge {
 }
 
 /**
+ * Coverage status for a given metric area.
+ * - "complete": all available data was analyzed
+ * - "partial": only a subset was analyzed
+ * - "unavailable": no data could be obtained
+ * - "failed": an error occurred
+ */
+export type CoverageStatus = "complete" | "partial" | "unavailable" | "failed";
+
+/**
  * Analysis-wide coverage tracking.
  * Every metric should report how much of the repository was actually examined.
+ * Different metrics can have different coverage — do NOT collapse to a single
+ * "100% analyzed" claim unless every metric is truly complete.
  */
 export interface AnalysisCoverage {
   /** File analysis coverage */
@@ -232,27 +244,40 @@ export interface AnalysisCoverage {
     total: number;
     analyzed: number;
     skipped: number;
+    /** e.g. "Repository files: 1,284" */
+    status: CoverageStatus;
   };
-  /** Dependency analysis coverage */
+  /** Deep source-file dependency analysis coverage */
   dependencies: {
+    /** Total source files eligible for dependency parsing */
     sourceFilesTotal: number;
+    /** Source files that were actually deeply parsed */
     sourceFilesAnalyzed: number;
+    status: CoverageStatus;
   };
   /** Git history coverage */
   history: {
+    /** Total commits available in the repository */
     totalCommits: number;
+    /** Commits actually fetched and analyzed */
     commitsAnalyzed: number;
-    /** e.g. "Detailed history: 486 / 1,204 commits analyzed" */
+    /** Human-readable label, e.g. "Full available history analyzed" */
     label: string;
     /** Earliest commit date (ISO string) when available */
     historyStart?: string;
     /** Most recent commit date (ISO string) when available */
     historyEnd?: string;
+    /** Number of days the fetched history spans */
+    historyDays?: number;
+    /** Whether the fetched history covers the full repo history */
+    historyComplete: boolean;
+    status: CoverageStatus;
   };
   /** Contributor coverage */
   contributors: {
     total: number;
     analyzed: number;
+    status: CoverageStatus;
   };
   /** Overall confidence level */
   confidence: "high" | "medium" | "low";

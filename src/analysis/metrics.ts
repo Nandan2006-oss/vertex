@@ -25,6 +25,7 @@ import type {
   FrameworkInfo,
   RiskFactor,
   AnalysisCoverage,
+  CoverageStatus,
 } from "./types";
 import { RISK_WEIGHTS } from "./types";
 
@@ -859,6 +860,7 @@ export function generateOnboardingGuide(
 /**
  * Build a coverage report from analysis state.
  * This tells the user how much of the repository was actually examined.
+ * Different metrics have independent coverage — never conflate them.
  */
 export function buildCoverage(params: {
   totalFiles: number;
@@ -897,21 +899,63 @@ export function buildCoverage(params: {
         ? "medium"
         : "low";
 
-  const historyLabel = historyStart && historyEnd
-    ? `Detailed history: ${commitsAnalyzed} / ${totalCommits} commits (${historyStart.slice(0, 10)} to ${historyEnd.slice(0, 10)})`
-    : totalCommits > 0
-      ? `Detailed history: ${commitsAnalyzed} / ${totalCommits} commits analyzed`
-      : "Git history not available";
+  // Separate coverage status for each area
+  const fileStatus: CoverageStatus =
+    totalFiles === 0 ? "unavailable"
+    : analyzedFiles >= totalFiles ? "complete"
+    : analyzedFiles > 0 ? "partial"
+    : "unavailable";
+
+  const depStatus: CoverageStatus =
+    sourceFilesTotal === 0 ? "unavailable"
+    : sourceFilesAnalyzed >= sourceFilesTotal ? "complete"
+    : sourceFilesAnalyzed > 0 ? "partial"
+    : "unavailable";
+
+  const historyStatus: CoverageStatus =
+    totalCommits === 0 ? "unavailable"
+    : commitsAnalyzed >= totalCommits ? "complete"
+    : commitsAnalyzed > 0 ? "partial"
+    : "unavailable";
+
+  const contribStatus: CoverageStatus =
+    totalContributors === 0 ? "unavailable"
+    : analyzedContributors >= totalContributors ? "complete"
+    : analyzedContributors > 0 ? "partial"
+    : "unavailable";
+
+  // Build an honest history label
+  let historyLabel: string;
+  if (totalCommits === 0) {
+    historyLabel = "Git history not available";
+  } else if (commitsAnalyzed >= totalCommits) {
+    historyLabel = `Full available history analyzed (${commitsAnalyzed} commits)`;
+  } else if (historyStatus === "partial") {
+    historyLabel = `History partially analyzed — ${commitsAnalyzed} of ~${totalCommits} commits`;
+  } else {
+    historyLabel = `Partial Git history analyzed (${commitsAnalyzed} commits)`;
+  }
+
+  // Calculate history span in days
+  let historyDays: number | undefined;
+  if (historyStart && historyEnd) {
+    historyDays = Math.round(
+      (new Date(historyEnd).getTime() - new Date(historyStart).getTime())
+      / (1000 * 60 * 60 * 24),
+    ) + 1;
+  }
 
   return {
     files: {
       total: totalFiles,
       analyzed: analyzedFiles,
       skipped: totalFiles - analyzedFiles,
+      status: fileStatus,
     },
     dependencies: {
       sourceFilesTotal,
       sourceFilesAnalyzed,
+      status: depStatus,
     },
     history: {
       totalCommits,
@@ -919,10 +963,14 @@ export function buildCoverage(params: {
       label: historyLabel,
       historyStart,
       historyEnd,
+      historyDays,
+      historyComplete: historyStatus === "complete",
+      status: historyStatus,
     },
     contributors: {
       total: totalContributors,
       analyzed: analyzedContributors,
+      status: contribStatus,
     },
     confidence,
   };

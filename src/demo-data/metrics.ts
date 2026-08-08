@@ -1,11 +1,14 @@
 import type { Metrics } from "./types";
 
 /**
- * Trailing-14-day operational metrics for vertex/control-plane.
+ * Trailing-14-day commit activity for vertex/control-plane.
  * Every number on the Overview screen derives from here.
+ * NOTE: This is commit activity, NOT deployment cadence.
+ * Vertex does not have CI/CD deployment data — commit timestamps
+ * are the only signal available.
  */
 export const metrics: Metrics = {
-  deployCadence: [
+  commitActivity: [
     { date: "2025-02-01", value: 3 },
     { date: "2025-02-02", value: 5 },
     { date: "2025-02-03", value: 2 },

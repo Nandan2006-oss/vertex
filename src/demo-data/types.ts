@@ -59,8 +59,6 @@ export interface Commit {
   date: string;
   /** Affected file paths (mono) */
   files: string[];
-  /** Whether this commit was deployed */
-  deployed: boolean;
 }
 
 export interface MetricPoint {
@@ -70,8 +68,8 @@ export interface MetricPoint {
 }
 
 export interface Metrics {
-  /** Daily deploy counts */
-  deployCadence: MetricPoint[];
+  /** Daily commit counts (from git history, NOT deployments) */
+  commitActivity: MetricPoint[];
   /** Daily cumulative debt-score trend */
   debtTrend: MetricPoint[];
 }

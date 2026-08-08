@@ -304,10 +304,10 @@ export async function analyzeLocalRepository(
         }))
       : [];
 
-  // Metrics: commit cadence is unavailable (no timestamp data from git logs)
+  // Metrics: commit activity is unavailable (no timestamp data from git logs)
   // Debt trend: unavailable unless we have TODO/FIXME markers
   const metrics: RepositoryAnalysis["metrics"] = {
-    deployCadence: [],
+    commitActivity: [],
     debtTrend: [],
   };
 

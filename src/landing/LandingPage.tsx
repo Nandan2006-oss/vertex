@@ -147,8 +147,8 @@ const FEATURES = [
   {
     eyebrow: "Overview",
     title: "Health at a glance",
-    body: "Deploy cadence, commit velocity, and debt trend in one quiet snapshot — every number derived from your repository data, never a placeholder.",
-    mono: "deploys/14d · debt trend",
+    body: "Commit velocity, module health, and debt trend in one quiet snapshot — every number derived from your repository data, never a placeholder.",
+    mono: "commits/14d · debt trend",
   },
   {
     eyebrow: "Architecture",
@@ -245,7 +245,7 @@ function HistoryTimeline() {
             A living history, not a snapshot
           </h2>
           <p className="mt-3 max-w-lg text-secondary">
-            Every commit, every deploy — a timeline of how your system evolved.
+            Every commit — a timeline of how your system evolved.
             Hashes and file paths, exactly as they were.
           </p>
         </Reveal>
@@ -255,9 +255,6 @@ function HistoryTimeline() {
               <div className="flex h-full flex-col rounded-sm border border-border bg-surface p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <span className="font-mono text-xs text-muted">{c.hash}</span>
-                  {c.deployed && (
-                    <span className="h-2 w-2 rounded-full bg-emerald" aria-label="deployed" />
-                  )}
                 </div>
                 <p className="text-sm text-foreground">{c.message}</p>
                 <p className="mt-auto pt-3 font-mono text-[11px] text-muted">

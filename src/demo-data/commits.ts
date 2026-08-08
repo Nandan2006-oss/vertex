@@ -3,7 +3,11 @@ import type { Commit } from "./types";
 /**
  * Recent commit history for vertex/control-plane.
  * Hand-crafted to read like a real engineering log — mix of features,
- * fixes, refactors, chores; some deployed, some not.
+ * fixes, refactors, chores.
+ *
+ * NOTE: This is commit history, NOT deployment history. Vertex does not
+ * have CI/CD pipeline data. The "deployed" field has been removed because
+ * we cannot determine deployment status from git commits alone.
  */
 export const commits: Commit[] = [
   {
@@ -15,7 +19,6 @@ export const commits: Commit[] = [
       "src/services/billing/payment/retry.ts",
       "src/services/billing/payment/handler.ts",
     ],
-    deployed: true,
   },
   {
     hash: "8d2e7b1",
@@ -23,7 +26,6 @@ export const commits: Commit[] = [
     author: "devon.c",
     date: "2025-02-13T16:22:00Z",
     files: ["src/services/scheduler/lease/manager.ts"],
-    deployed: false,
   },
   {
     hash: "a04c5f9",
@@ -34,7 +36,6 @@ export const commits: Commit[] = [
       "src/services/billing/validation/schema.ts",
       "src/services/billing/payment/handler.ts",
     ],
-    deployed: true,
   },
   {
     hash: "77b3e40",
@@ -42,7 +43,6 @@ export const commits: Commit[] = [
     author: "sana.r",
     date: "2025-02-12T14:48:00Z",
     files: ["src/services/gateway/middleware/rate_limit.go"],
-    deployed: false,
   },
   {
     hash: "e19a6d3",
@@ -53,7 +53,6 @@ export const commits: Commit[] = [
       "src/services/ingest/buffer/pool.go",
       "src/services/ingest/partition/assigner.go",
     ],
-    deployed: true,
   },
   {
     hash: "5c8f21a",
@@ -61,7 +60,6 @@ export const commits: Commit[] = [
     author: "sana.r",
     date: "2025-02-11T18:12:00Z",
     files: ["src/services/worker/connection/retry.go"],
-    deployed: false,
   },
   {
     hash: "b2d9047",
@@ -69,7 +67,6 @@ export const commits: Commit[] = [
     author: "mira.k",
     date: "2025-02-11T10:56:00Z",
     files: ["tests/billing/pipeline.integration.test.ts"],
-    deployed: true,
   },
   {
     hash: "9f7c1e8",
@@ -80,6 +77,5 @@ export const commits: Commit[] = [
       "deploy/control-plane/values.yaml",
       "deploy/control-plane/Chart.yaml",
     ],
-    deployed: false,
   },
 ];

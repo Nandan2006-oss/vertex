@@ -4,6 +4,9 @@
  * Built from the typed demo data modules so workspace screens can
  * render without running a real analysis. Swap this module when
  * connecting real repository ingestion.
+ *
+ * ACCURACY NOTE: This is demo data for UI development. When connected to
+ * a real GitHub analysis, the demoAnalysis module is replaced entirely.
  */
 import type {
   RepositoryAnalysis,
@@ -319,7 +322,7 @@ export const demoAnalysis: RepositoryAnalysis = {
   externalDependencies,
   circularDependencies,
   metrics: {
-    deployCadence: metrics.deployCadence,
+    commitActivity: metrics.commitActivity,
     debtTrend: metrics.debtTrend,
   },
   churn,
@@ -340,21 +343,33 @@ export const demoAnalysis: RepositoryAnalysis = {
   evidence,
   onboardingGuide,
   coverage: {
-    files: { total: fileTree.length, analyzed: fileTree.length, skipped: 0 },
+    files: {
+      total: fileTree.length,
+      analyzed: fileTree.length,
+      skipped: 0,
+      status: "complete",
+    },
     dependencies: {
       sourceFilesTotal: sourceFiles.length,
       sourceFilesAnalyzed: sourceFiles.length,
+      status: "complete",
     },
     history: {
       totalCommits: commits.length,
       commitsAnalyzed: commits.length,
-      label: `${commits.length} / ${commits.length} commits analyzed`,
+      label: `Full available history analyzed (${commits.length} commits)`,
       historyStart: commits.length > 0 ? commits[commits.length - 1].date : undefined,
       historyEnd: commits.length > 0 ? commits[0].date : undefined,
+      historyDays: commits.length >= 2
+        ? Math.round((new Date(commits[0].date).getTime() - new Date(commits[commits.length - 1].date).getTime()) / (1000 * 60 * 60 * 24)) + 1
+        : undefined,
+      historyComplete: true,
+      status: "complete",
     },
     contributors: {
       total: contributors.length,
       analyzed: contributors.length,
+      status: "complete",
     },
     confidence: "high",
   },
