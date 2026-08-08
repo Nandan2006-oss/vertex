@@ -869,6 +869,8 @@ export function buildCoverage(params: {
   commitsAnalyzed: number;
   totalContributors: number;
   analyzedContributors: number;
+  historyStart?: string;
+  historyEnd?: string;
 }): AnalysisCoverage {
   const {
     totalFiles,
@@ -879,6 +881,8 @@ export function buildCoverage(params: {
     commitsAnalyzed,
     totalContributors,
     analyzedContributors,
+    historyStart,
+    historyEnd,
   } = params;
 
   const historyPct = totalCommits > 0 ? commitsAnalyzed / totalCommits : 0;
@@ -893,6 +897,12 @@ export function buildCoverage(params: {
         ? "medium"
         : "low";
 
+  const historyLabel = historyStart && historyEnd
+    ? `Detailed history: ${commitsAnalyzed} / ${totalCommits} commits (${historyStart.slice(0, 10)} to ${historyEnd.slice(0, 10)})`
+    : totalCommits > 0
+      ? `Detailed history: ${commitsAnalyzed} / ${totalCommits} commits analyzed`
+      : "Git history not available";
+
   return {
     files: {
       total: totalFiles,
@@ -906,7 +916,9 @@ export function buildCoverage(params: {
     history: {
       totalCommits,
       commitsAnalyzed,
-      label: `Detailed history: ${commitsAnalyzed} / ${totalCommits} commits analyzed`,
+      label: historyLabel,
+      historyStart,
+      historyEnd,
     },
     contributors: {
       total: totalContributors,

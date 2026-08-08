@@ -355,6 +355,8 @@ export async function analyzeLocalRepository(
     commitsAnalyzed: 0,
     totalContributors: contributors.length,
     analyzedContributors: contributors.length,
+    historyStart: undefined,
+    historyEnd: undefined,
   });
 
   onProgress({ fraction: 1, stage: "Analysis complete", detail: name });

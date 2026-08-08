@@ -610,6 +610,12 @@ export async function analyzeGithubRepository(
   );
 
   // Build coverage report
+  const oldestCommit = commits.length > 0
+    ? commits.reduce((a, b) => a.date < b.date ? a : b)
+    : null;
+  const newestCommit = commits.length > 0
+    ? commits.reduce((a, b) => a.date > b.date ? a : b)
+    : null;
   const coverage = buildCoverage({
     totalFiles: fileCount,
     analyzedFiles: fileCount,
@@ -619,6 +625,8 @@ export async function analyzeGithubRepository(
     commitsAnalyzed,
     totalContributors: Math.max(contributorCount, authorSet.size),
     analyzedContributors: contributorCount,
+    historyStart: oldestCommit?.date,
+    historyEnd: newestCommit?.date,
   });
 
   onProgress({

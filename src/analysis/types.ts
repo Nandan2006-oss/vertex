@@ -244,6 +244,10 @@ export interface AnalysisCoverage {
     commitsAnalyzed: number;
     /** e.g. "Detailed history: 486 / 1,204 commits analyzed" */
     label: string;
+    /** Earliest commit date (ISO string) when available */
+    historyStart?: string;
+    /** Most recent commit date (ISO string) when available */
+    historyEnd?: string;
   };
   /** Contributor coverage */
   contributors: {

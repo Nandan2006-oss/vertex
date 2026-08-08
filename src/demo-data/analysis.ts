@@ -349,6 +349,8 @@ export const demoAnalysis: RepositoryAnalysis = {
       totalCommits: commits.length,
       commitsAnalyzed: commits.length,
       label: `${commits.length} / ${commits.length} commits analyzed`,
+      historyStart: commits.length > 0 ? commits[commits.length - 1].date : undefined,
+      historyEnd: commits.length > 0 ? commits[0].date : undefined,
     },
     contributors: {
       total: contributors.length,

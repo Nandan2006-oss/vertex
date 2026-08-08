@@ -133,7 +133,9 @@ export function ArchitectureGraph({
           source: GraphNode;
           target: GraphNode;
         };
-        if (!line || !l.source.x || !l.target.x) return;
+        if (!line) return;
+        if (l.source.x === undefined || l.source.x === null) return;
+        if (l.target.x === undefined || l.target.x === null) return;
         line.setAttribute("x1", String(l.source.x));
         line.setAttribute("y1", String(l.source.y));
         line.setAttribute("x2", String(l.target.x));
@@ -141,7 +143,9 @@ export function ArchitectureGraph({
       });
       nodeRefs.current.forEach((g, i) => {
         const n = nodes[i];
-        if (!g || !n.x || !n.y) return;
+        if (!g) return;
+        if (n.x === undefined || n.x === null) return;
+        if (n.y === undefined || n.y === null) return;
         g.setAttribute(
           "transform",
           `translate(${n.x.toFixed(1)}, ${n.y.toFixed(1)})`,

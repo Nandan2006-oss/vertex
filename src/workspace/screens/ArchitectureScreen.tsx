@@ -284,7 +284,7 @@ export function ArchitectureScreen() {
                 {selectedRisk && (
                   <>
                     <div className="my-1 border-t border-border" />
-                    <DetailRow label="Risk score" value={`${selectedRisk.riskScore}/100`} />
+                    <DetailRow label="Risk score (heuristic)" value={`${selectedRisk.riskScore}/100`} />
                     <DetailRow
                       label="Churn (commit count)"
                       value={`${selectedRisk.churn}`}
@@ -316,7 +316,7 @@ export function ArchitectureScreen() {
                 {selectedRisk && selectedRisk.factors.filter((f) => f.contribution > 0).length > 0 && (
                   <div className="mt-1">
                     <div className="my-1 border-t border-border" />
-                    <span className="text-[11px] text-secondary">Risk factors:</span>
+                    <span className="text-[11px] text-secondary">Risk factors (heuristic weights):</span>
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {selectedRisk.factors
                         .filter((f) => f.contribution > 0)

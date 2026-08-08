@@ -31,10 +31,18 @@ export function OverviewScreen() {
     const recentCommits = commits.slice(0, 3);
     const topRisky = moduleRisks.filter((r) => r.riskScore > 30).slice(0, 3);
     const confidenceLabel = coverage.confidence === "high" ? "High" : coverage.confidence === "medium" ? "Medium" : "Low";
+
+    // Separate source-analysis coverage from deep dependency analysis
+    const depFilesAnalyzed = coverage.dependencies.sourceFilesAnalyzed;
+    const depFilesTotal = coverage.dependencies.sourceFilesTotal;
+    const deepAnalysisPct = depFilesTotal > 0
+      ? Math.round((depFilesAnalyzed / depFilesTotal) * 100)
+      : 0;
+
     return {
       sourceCount, docCount, testCount, configCount,
       totalServices, avgCommits, currentDebt, recentCommits, topRisky,
-      confidenceLabel,
+      confidenceLabel, depFilesAnalyzed, depFilesTotal, deepAnalysisPct,
     };
   }, [services, metrics, commits, sourceFiles, classifiedFiles, moduleRisks, coverage]);
 
@@ -94,7 +102,16 @@ export function OverviewScreen() {
           <span className="text-muted">|</span>
           <span className="text-muted">{coverage.history.label}</span>
           <span className="text-muted">|</span>
-          <span className="text-muted">{coverage.files.analyzed} / {coverage.files.total} files</span>
+          <span className="text-muted" title={`${coverage.files.analyzed} of ${coverage.files.total} total files scanned`}>
+            Files: {coverage.files.analyzed} / {coverage.files.total}
+          </span>
+          <span className="text-muted">|</span>
+          <span className="text-muted" title={`Deep dependency analysis: ${stats.depFilesAnalyzed} of ${stats.depFilesTotal} source files`}>
+            Deep analysis: {stats.depFilesAnalyzed} / {stats.depFilesTotal}
+            {stats.depFilesTotal > 0 && stats.deepAnalysisPct < 100 && (
+              <span className="ml-1">({stats.deepAnalysisPct}%)</span>
+            )}
+          </span>
         </div>
       </div>
 
