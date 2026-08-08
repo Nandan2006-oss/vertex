@@ -22,10 +22,16 @@ import type {
   DebtEvidence,
   EvidenceItem,
   FrameworkInfo,
+  RealDependency,
+  Service,
+  Dependency,
+  InternalDependencyGroup,
+  CircularDependency,
 } from "./types";
 import { buildLanguages, detectLanguage } from "./languages";
 import { classifyFile, groupByCategory } from "./classify";
-import { buildCoverage } from "./metrics";
+import { parseImports, importsToDependencies, detectImportParser } from "./imports";
+import { buildCoverage, estimateComplexity } from "./metrics";
 
 const IGNORED_PATHS = new Set([
   "node_modules", ".git", ".next", ".nuxt", ".cache",
@@ -107,6 +113,13 @@ export async function analyzeLocalRepository(
         totalLines += count.total;
         const ext = relPath.slice(relPath.lastIndexOf(".") + 1).toLowerCase();
         extLines[ext] = (extLines[ext] ?? 0) + count.total;
+      }
+      // Compute complexity estimate from actual file content
+      if (loc !== null) {
+        try {
+          const text = await file.text();
+          complexityEstimate = estimateComplexity(text, lang?.name ?? null);
+        } catch { /* binary file */ }
       }
     }
 
@@ -198,8 +211,75 @@ export async function analyzeLocalRepository(
   onProgress({ fraction: 0.78, stage: "Detecting languages", detail: "Grouping by file extension" });
   const languages = buildLanguages(extLines);
 
-  onProgress({ fraction: 0.84, stage: "Building module map", detail: "Mapping top-level directories" });
+  // ── Import / dependency analysis from real file content ──
+  onProgress({ fraction: 0.80, stage: "Analyzing imports", detail: "Parsing import statements from source files" });
+
+  const knownFiles = new Set(sourceFiles.map((f) => f.path));
+  const fileContents = new Map<string, string>();
+  const allRealDeps: RealDependency[] = [];
+
+  // Reread source files that support import parsing, now that we have classifiedFiles populated
+  const importableCount = sourceFiles.filter((f) => detectImportParser(f.path) !== null).length;
+  let importParsed = 0;
+
+  for (const file of sorted) {
+    const relPath = stripRoot(file.webkitRelativePath ?? file.name);
+    if (!relPath || isIgnored(relPath)) continue;
+    if (!knownFiles.has(relPath)) continue;
+    const parser = detectImportParser(relPath);
+    if (!parser) continue;
+
+    try {
+      const text = await file.text();
+      fileContents.set(relPath, text);
+      const parsed = parseImports(text, relPath);
+      const deps = importsToDependencies(relPath, parsed, knownFiles);
+      allRealDeps.push(...deps);
+    } catch { /* skip unparseable files */ }
+
+    importParsed++;
+    if (importParsed % 20 === 0) {
+      onProgress({
+        fraction: 0.80 + (importParsed / Math.max(1, importableCount)) * 0.08,
+        stage: "Analyzing imports",
+        detail: `Parsed ${importParsed} of ${importableCount} files`,
+      });
+    }
+  }
+
+  const internalDeps = allRealDeps.filter((d) => !d.external);
+  const externalDeps = allRealDeps.filter((d) => d.external);
+
+  const internalGroupMap = new Map<string, InternalDependencyGroup>();
+  for (const d of internalDeps) {
+    const key = `${d.fromFile}→${d.toFile}`;
+    if (!internalGroupMap.has(key)) {
+      internalGroupMap.set(key, { from: d.fromFile, to: d.toFile, evidence: d.evidence });
+    }
+  }
+
+  const externalGroupMap = new Map<string, Set<string>>();
+  for (const d of externalDeps) {
+    const name = d.externalName ?? d.toFile.replace("[external] ", "");
+    if (!externalGroupMap.has(name)) {
+      externalGroupMap.set(name, new Set());
+    }
+    externalGroupMap.get(name)!.add(d.fromFile);
+  }
+
+  const internalDependencyGroups = [...internalGroupMap.values()];
+  const externalDependencyGroups = [...externalGroupMap.entries()].map(([name, imports]) => ({
+    name,
+    imports: [...imports],
+  }));
+
+  const circularDeps = detectCircularDependencies(internalDependencyGroups);
+
+  onProgress({ fraction: 0.89, stage: "Building module map", detail: "Mapping top-level directories" });
   const services = buildModules(fileNodes, classifiedFiles);
+
+  // Build module-level dependencies from real file-level dependencies
+  const deps = buildModuleDependencies(services, allRealDeps);
 
   // No git history = no churn, no co-changes, no commits
   const churn: ChurnRecord[] = [];
@@ -218,11 +298,6 @@ export async function analyzeLocalRepository(
       }))
     : [];
 
-  // NO fabricated dependencies — dependency analysis requires parsing imports
-  const internalDeps: RepositoryAnalysis["internalDependencies"] = [];
-  const externalDeps: RepositoryAnalysis["externalDependencies"] = [];
-  const deps: RepositoryAnalysis["dependencies"] = [];
-
   // Metrics: commit cadence is unavailable (no timestamp data from git logs)
   // Debt trend: unavailable unless we have TODO/FIXME markers
   const metrics: RepositoryAnalysis["metrics"] = {
@@ -233,7 +308,7 @@ export async function analyzeLocalRepository(
   // Tech debt: based ONLY on large files from the scan (no fabricated scores)
   const techDebt = buildTechDebtItems(classifiedFiles);
 
-  // Module risks: all counts are 0 because we have no real git or dep data
+  // Module risks: use real dependency counts and complexity estimates
   const moduleRisks: ModuleRisk[] = services.map((svc) => {
     const svcSourceFiles = classifiedFiles.filter(
       (f) => f.path.startsWith(svc.id),
@@ -247,6 +322,13 @@ export async function analyzeLocalRepository(
       ? Math.round(complexities.reduce((a, b) => a + b, 0) / complexities.length)
       : 0;
 
+    const depsFromModule = allRealDeps.filter((d) =>
+      svc.files.some((mf) => d.fromFile === mf || d.fromFile.startsWith(svc.id)),
+    );
+    const depsToModule = allRealDeps.filter((d) =>
+      svc.files.some((mf) => d.toFile === mf || d.toFile.startsWith(svc.id)),
+    );
+
     return {
       moduleName: svc.name,
       riskScore: 0,
@@ -255,8 +337,8 @@ export async function analyzeLocalRepository(
       fileCount: svcFileCount,
       complexityEstimate: avgComplexity,
       churn: 0,
-      dependencyCount: 0,
-      dependentCount: 0,
+      dependencyCount: depsFromModule.length,
+      dependentCount: depsToModule.length,
       contributorCount: 0,
       isGodModule: false,
       reasons: [],
@@ -272,9 +354,9 @@ export async function analyzeLocalRepository(
     totalFiles: fileNodes.length,
     analyzedFiles: fileNodes.length,
     sourceFilesTotal: sourceFiles.length,
-    sourceFilesAnalyzed: 0, // no deep import analysis
+    sourceFilesAnalyzed: fileContents.size,
     totalCommits: commitCount,
-    commitsAnalyzed: 0, // no per-file change data from git logs
+    commitsAnalyzed: 0,
     totalContributors: contributors.length,
     analyzedContributors: contributors.length,
   });
@@ -303,10 +385,10 @@ export async function analyzeLocalRepository(
     commits,
     services,
     dependencies: deps,
-    realDependencies: [],
-    internalDependencies: internalDeps,
-    externalDependencies: externalDeps,
-    circularDependencies: [],
+    realDependencies: allRealDeps,
+    internalDependencies: internalDependencyGroups,
+    externalDependencies: externalDependencyGroups,
+    circularDependencies: circularDeps,
     metrics,
     churn,
     coChanges,
@@ -437,4 +519,99 @@ function buildOnboardingGuide(
     riskyModules,
     primaryContributors: [],
   };
+}
+
+/* ── Dependency helpers (shared logic with github.ts) ── */
+
+function buildModuleDependencies(
+  services: Service[],
+  realDeps: RealDependency[],
+): Dependency[] {
+  const edgeMap = new Map<string, { count: number; evidence: string[] }>();
+
+  for (const dep of realDeps) {
+    if (dep.external) continue;
+    const fromModule = services.find((s) =>
+      dep.fromFile.startsWith(s.id) || s.files.includes(dep.fromFile),
+    );
+    const toModule = services.find((s) =>
+      dep.toFile.startsWith(s.id) || s.files.includes(dep.toFile),
+    );
+
+    if (fromModule && toModule && fromModule.id !== toModule.id) {
+      const key = `${fromModule.id}|${toModule.id}`;
+      const entry = edgeMap.get(key) ?? { count: 0, evidence: [] };
+      entry.count++;
+      entry.evidence.push(dep.evidence);
+      edgeMap.set(key, entry);
+    }
+  }
+
+  return [...edgeMap.entries()]
+    .filter(([, data]) => data.count > 0)
+    .map(([key, data]) => {
+      const [fromId, toId] = key.split("|");
+
+      let risk: "none" | "moderate" | "high" = "none";
+      let reason: string | undefined;
+
+      if (data.count >= 3) {
+        risk = "high";
+        reason = `${data.count} dependency relationships from "${fromId}" to "${toId}"`;
+      } else if (data.count >= 1) {
+        risk = "moderate";
+        reason = `${data.count} dependency relationship(s) from "${fromId}" to "${toId}"`;
+      }
+
+      return {
+        from: fromId,
+        to: toId,
+        risk,
+        reason,
+      };
+    });
+}
+
+function detectCircularDependencies(
+  internalDeps: InternalDependencyGroup[],
+): CircularDependency[] {
+  const graph = new Map<string, string[]>();
+  for (const dep of internalDeps) {
+    const list = graph.get(dep.from) ?? [];
+    list.push(dep.to);
+    graph.set(dep.from, list);
+  }
+
+  const cycles: CircularDependency[] = [];
+  const visited = new Set<string>();
+  const recStack = new Set<string>();
+
+  function dfs(node: string, path: string[]) {
+    visited.add(node);
+    recStack.add(node);
+
+    const neighbors = graph.get(node) ?? [];
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        dfs(neighbor, [...path, neighbor]);
+      } else if (recStack.has(neighbor)) {
+        const cycleStart = path.indexOf(neighbor);
+        if (cycleStart !== -1) {
+          const cycle = path.slice(cycleStart);
+          cycle.push(neighbor);
+          cycles.push({ cycle });
+        }
+      }
+    }
+
+    recStack.delete(node);
+  }
+
+  for (const node of graph.keys()) {
+    if (!visited.has(node)) {
+      dfs(node, [node]);
+    }
+  }
+
+  return cycles.slice(0, 5);
 }

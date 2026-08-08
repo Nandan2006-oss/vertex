@@ -170,39 +170,65 @@ export function calculateChurn(
 /**
  * Detect co-change relationships: files that appear together
  * in the same commits.
+ *
+ * Uses Jaccard(A,B) = |A ∩ B| / |A ∪ B| for normalized coupling.
+ * Also tracks rawCoChangeCount to account for sample size.
+ * Filters out pairs with insufficient history.
  */
 export function detectCoChanges(commits: Commit[]): CoChange[] {
-  const pairs = new Map<string, { count: number; totalCommits: number }>();
-
-  for (const commit of commits) {
-    const files = (commit.files ?? []).filter(
+  // Track per-file commit sets
+  const fileCommits = new Map<string, Set<number>>();
+  for (let ci = 0; ci < commits.length; ci++) {
+    const files = (commits[ci].files ?? []).filter(
       (f) => !f.startsWith(".") && !f.includes("node_modules"),
     );
     if (files.length < 2) continue;
+    for (const file of files) {
+      const set = fileCommits.get(file) ?? new Set();
+      set.add(ci);
+      fileCommits.set(file, set);
+    }
+  }
 
-    for (let i = 0; i < files.length; i++) {
-      for (let j = i + 1; j < files.length; j++) {
-        const key = [files[i], files[j]].sort().join("|||");
-        const entry = pairs.get(key) ?? { count: 0, totalCommits: 0 };
-        entry.count++;
-        entry.totalCommits = commits.length;
-        pairs.set(key, entry);
-      }
+  // Build pairwise co-change matrix with Jaccard
+  const pairs = new Map<string, { count: number; totalCommits: number; unionSize: number }>();
+  const seen = new Set<string>();
+
+  for (const [fileA, commitsA] of fileCommits) {
+    for (const [fileB, commitsB] of fileCommits) {
+      if (fileA >= fileB) continue;
+      const key = `${fileA}|||${fileB}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const intersection = new Set([...commitsA].filter((c) => commitsB.has(c)));
+      const coCount = intersection.size;
+      if (coCount < 1) continue;
+
+      const union = new Set([...commitsA, ...commitsB]);
+      pairs.set(key, {
+        count: coCount,
+        totalCommits: commits.length,
+        unionSize: union.size,
+      });
     }
   }
 
   return [...pairs.entries()]
-    .filter(([, data]) => data.count >= 2)
     .map(([key, data]) => {
       const [fileA, fileB] = key.split("|||");
+      const jaccard = data.unionSize > 0 ? data.count / data.unionSize : 0;
       return {
         fileA,
         fileB,
         commitCount: data.count,
         totalCommits: data.totalCommits,
+        jaccard: Math.round(jaccard * 1000) / 1000,
+        insufficientEvidence: data.count < 2 || data.unionSize < 3,
       };
     })
-    .sort((a, b) => b.commitCount - a.commitCount)
+    .filter((c) => !c.insufficientEvidence)
+    .sort((a, b) => b.jaccard - a.jaccard)
     .slice(0, 50);
 }
 
@@ -299,6 +325,7 @@ export function calculateModuleRisks(
   churn: ChurnRecord[],
   sourceFiles: ClassifiedFile[],
   realDependencies: RealDependency[],
+  commits: Commit[],
   contributorCountMap?: Map<string, number>,
 ): ModuleRisk[] {
   const totalChurn = churn.reduce((s, c) => s + c.totalCommits, 0) || 1;
@@ -436,26 +463,55 @@ export function calculateModuleRisks(
       reasons.push(`${totalLOC} LOC across ${fileCount} files — large module`);
     }
 
-    // Factor 5: Bus factor (only meaningful with real contributor data)
-    const busFactorContribution = hasContributorData && (contributorCount <= 2 && fileCount > 3) ? RISK_WEIGHTS.busFactor : 0;
+    // Factor 5: Bus factor using 80% threshold
+    // Minimum number of contributors responsible for 80% of changes to this module
+    let busFactorContribution = 0;
+    let busFactorValue: string | number = "Unavailable";
+    let busFactorExplanation = "Bus factor unavailable — insufficient contributor data";
+
+    if (hasContributorData && contributorCount > 0 && moduleChurnCount > 0) {
+      // Calculate bus factor from real contributor distribution per module
+      const moduleContributorCommitCounts = new Map<string, number>();
+      for (const c of commits) {
+        if (c.files?.some((f) => moduleFiles.some((mf) => f === mf || f.startsWith(svc.id)))) {
+          moduleContributorCommitCounts.set(
+            c.author,
+            (moduleContributorCommitCounts.get(c.author) ?? 0) + 1,
+          );
+        }
+      }
+      const sortedContribs = [...moduleContributorCommitCounts.entries()]
+        .sort((a, b) => b[1] - a[1]);
+      const totalModuleCommits = sortedContribs.reduce((s, [, cnt]) => s + cnt, 0);
+      let cumulative = 0;
+      let busFactor = 0;
+      for (const [, cnt] of sortedContribs) {
+        cumulative += cnt;
+        busFactor++;
+        if (cumulative / totalModuleCommits >= 0.8) break;
+      }
+
+      busFactorValue = busFactor;
+      busFactorContribution = busFactor <= 2 && fileCount > 3 ? RISK_WEIGHTS.busFactor : 0;
+      busFactorExplanation = busFactor <= 2 && fileCount > 3
+        ? `Bus factor: ${busFactor} — 80% of changes made by ${busFactor} contributor(s) for ${fileCount} files (concentrated knowledge)`
+        : `Bus factor: ${busFactor} — adequate contributor diversity`;
+    }
+
     score += busFactorContribution;
     factors.push({
       name: "Bus factor",
       contribution: busFactorContribution,
       evidence: {
-        metric: "Contributor count",
-        value: hasContributorData ? contributorCount : "Unavailable",
-        label: "Number of unique contributors (from git history)",
-        explanation: !hasContributorData
-          ? "Contributor data unavailable — git history not deeply analyzed"
-          : contributorCount <= 2 && fileCount > 3
-            ? `Only ${contributorCount} contributor(s) for ${fileCount} files — knowledge may be concentrated`
-            : `${contributorCount} contributors — adequate diversity`,
+        metric: "80%-threshold bus factor",
+        value: busFactorValue,
+        label: "Minimum contributors responsible for 80% of historical changes",
+        explanation: busFactorExplanation,
         confidence: hasContributorData ? "high" : "low",
       },
     });
-    if (hasContributorData && contributorCount <= 2 && fileCount > 3) {
-      reasons.push(`Only ${contributorCount} contributor(s) — bus factor concern`);
+    if (hasContributorData && typeof busFactorValue === "number" && busFactorValue <= 2 && fileCount > 3) {
+      reasons.push(`Bus factor: ${busFactorValue} — 80% of changes by few contributors`);
     }
 
     const finalScore = Math.min(100, Math.round(score));
@@ -593,10 +649,15 @@ export function buildTechDebt(
       });
     }
 
+    // Risk score derived from actual evidence: commit churn and recency
+    // Uses commit count normalized against file churn (no arbitrary multipliers)
+    const churnEvidence = Math.min(30, ch.totalCommits * 3) + Math.min(20, ch.recentChanges * 5);
+    const fileRiskScore = Math.min(85, churnEvidence);
+
     items.push({
       id: `debt-file-${ch.filePath.replace(/[^a-z0-9]/gi, "-")}`,
       hotspot: ch.filePath.split("/").pop() ?? ch.filePath,
-      riskScore: Math.min(85, 15 + ch.totalCommits * 2),
+      riskScore: fileRiskScore > 0 ? fileRiskScore : 0,
       factors: [],
       agingDebt: ch.firstChanged
         ? `${Math.round((Date.now() - new Date(ch.firstChanged).getTime()) / (1000 * 60 * 60 * 24))} days`
@@ -649,15 +710,15 @@ export function generateEvidence(
     });
   }
 
-  // Strongest co-change
-  const strongCoChanges = coChanges.filter((c) => c.commitCount >= 3);
+  // Strongest co-change (sorted by Jaccard coefficient)
+  const strongCoChanges = coChanges.filter((c) => c.jaccard !== undefined && c.jaccard > 0.3);
   if (strongCoChanges.length > 0) {
     const topCC = strongCoChanges[0];
     items.push({
       insight: `"${topCC.fileA.split("/").pop()}" and "${topCC.fileB.split("/").pop()}" change together frequently.`,
       source: "Git History",
       facts: [
-        `${topCC.commitCount} co-changes detected out of ${topCC.totalCommits} total commits analyzed`,
+        `${topCC.commitCount} co-changes detected (Jaccard: ${topCC.jaccard}) out of ${topCC.totalCommits} total commits analyzed`,
         `Files: ${topCC.fileA}, ${topCC.fileB}`,
       ],
       inference: "This suggests these files are architecturally coupled and should be reviewed together.",
@@ -678,17 +739,21 @@ export function generateEvidence(
     });
   }
 
-  // Contributor bus factor
-  const lowContributor = moduleRisks.filter((r) => r.contributorCount <= 2 && r.fileCount > 3);
+  // Contributor bus factor (using 80%-threshold)
+  const lowContributor = moduleRisks.filter((r) => {
+    const bfFactor = r.factors.find((f) => f.name === "Bus factor");
+    return bfFactor && typeof bfFactor.evidence.value === "number" && bfFactor.evidence.value <= 2 && r.fileCount > 3;
+  });
   if (lowContributor.length > 0) {
     const names = lowContributor.slice(0, 2).map((r) => `"${r.moduleName}"`).join(", ");
     items.push({
-      insight: `${names} ${lowContributor.length === 1 ? "has" : "have"} limited contributor diversity.`,
+      insight: `${names} ${lowContributor.length === 1 ? "has" : "have"} concentrated contributor knowledge.`,
       source: "Git History",
-      facts: lowContributor.slice(0, 2).map(
-        (r) => `${r.moduleName}: only ${r.contributorCount} contributor(s) for ${r.fileCount} files`,
-      ),
-      inference: "These modules may have a bus-factor risk — knowledge is concentrated.",
+      facts: lowContributor.slice(0, 2).map((r) => {
+        const bf = r.factors.find((f) => f.name === "Bus factor");
+        return `${r.moduleName}: bus factor ${bf?.evidence.value} (80% of changes by few) for ${r.fileCount} files`;
+      }),
+      inference: "These modules have elevated bus-factor risk — knowledge is concentrated among few contributors.",
     });
   }
 

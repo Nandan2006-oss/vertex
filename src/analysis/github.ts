@@ -166,6 +166,15 @@ async function fetchRawContent(owner: string, repo: string, path: string, branch
   }
 }
 
+/** Simple non-cryptographic content hash for deduplication */
+function simpleHash(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) & 0xffffffff;
+  }
+  return hash.toString(16);
+}
+
 /** Count actual lines in source text */
 function countLines(text: string): { total: number; code: number; blank: number; comment: number } {
   const lines = text.split("\n");
@@ -312,30 +321,45 @@ export async function analyzeGithubRepository(
   onProgress({ fraction: 0.30, stage: "Analyzing imports", detail: "Reading source file contents" });
 
   const filesToAnalyze = sourceFiles
-    .filter((f) => detectImportParser(f.path) !== null)
-    .slice(0, 50);
+    .filter((f) => detectImportParser(f.path) !== null);
 
-  const contentFetchItems = filesToAnalyze.map((f) => ({
-    key: f.path,
-    fetcher: () => fetchRawContent(owner, repo, f.path, branch, signal),
-  }));
+  const totalImportable = filesToAnalyze.length;
 
-  const contentResults = await concurrentFetch(
-    contentFetchItems,
-    CONCURRENCY_LIMIT,
-    (key, idx, total) => {
-      onProgress({
-        fraction: 0.30 + (idx / total) * 0.20,
-        stage: "Analyzing imports",
-        detail: `Reading ${key} (${idx + 1}/${total})`,
-      });
-    },
-  );
-
+  // Process files in batches with bounded concurrency, using content hashing
+  // to avoid re-fetching, and streaming progress per batch.
+  const BATCH_SIZE = 15;
   const fileContents = new Map<string, string>();
-  for (const [path, content] of contentResults) {
-    if (content !== null) {
-      fileContents.set(path, content);
+  const contentHashes = new Set<string>();
+
+  for (let batchStart = 0; batchStart < filesToAnalyze.length; batchStart += BATCH_SIZE) {
+    if (signal?.aborted) break;
+    const batch = filesToAnalyze.slice(batchStart, batchStart + BATCH_SIZE);
+    const batchItems = batch.map((f) => ({
+      key: f.path,
+      fetcher: () => fetchRawContent(owner, repo, f.path, branch, signal),
+    }));
+
+    const batchResults = await concurrentFetch(
+      batchItems,
+      CONCURRENCY_LIMIT,
+      (key, idx, _total) => {
+        onProgress({
+          fraction: 0.30 + (Math.min(batchStart + idx, totalImportable) / totalImportable) * 0.20,
+          stage: "Analyzing imports",
+          detail: `Reading ${key} (${batchStart + idx + 1}/${totalImportable})`,
+        });
+      },
+    );
+
+    for (const [path, content] of batchResults) {
+      if (content !== null) {
+        // Deduplicate identical content
+        const hash = simpleHash(content);
+        if (!contentHashes.has(hash)) {
+          contentHashes.add(hash);
+          fileContents.set(path, content);
+        }
+      }
     }
   }
 
@@ -567,7 +591,7 @@ export async function analyzeGithubRepository(
     contributorCountMap.set(moduleId, authors.size);
   }
 
-  const moduleRisks = calculateModuleRisks(services, churn, sourceFiles, allRealDeps, contributorCountMap);
+  const moduleRisks = calculateModuleRisks(services, churn, sourceFiles, allRealDeps, commits, contributorCountMap);
   const riskyModules = moduleRisks.filter((r) => r.riskScore > 30).slice(0, 10);
 
   const techDebt = buildTechDebt(moduleRisks, churn, coChanges, classifiedFiles);
@@ -842,13 +866,15 @@ function buildMetrics(
     });
   }
 
-  // Debt trend: based on actual TODO/FIXME/HACK markers found in analyzed files
-  // If no markers found, debt trend is flat (no evidence of debt markers)
-  const baseDebt = Math.min(400, Math.max(0, debtMarkers.count * 10));
-  for (const point of deployCadence) {
-    // Debt level is the count of markers (direct evidence)
-    debtTrend.push({ date: point.date, value: baseDebt });
+  // Debt trend: ONLY from actual TODO/FIXME/HACK markers found in analyzed files.
+  // Each marker found = 1 debt point. No arbitrary multipliers or fabrications.
+  if (debtMarkers.count > 0) {
+    const markerDebt = debtMarkers.count;
+    for (const point of deployCadence) {
+      debtTrend.push({ date: point.date, value: markerDebt });
+    }
   }
+  // If no markers found, debtTrend stays empty — "No evidence of debt markers found."
 
   return { deployCadence, debtTrend };
 }

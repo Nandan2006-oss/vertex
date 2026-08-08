@@ -27,7 +27,7 @@ export function OverviewScreen() {
     const currentDebt =
       metrics.debtTrend.length > 0
         ? metrics.debtTrend[metrics.debtTrend.length - 1].value
-        : 0;
+        : null;
     const recentCommits = commits.slice(0, 3);
     const topRisky = moduleRisks.filter((r) => r.riskScore > 30).slice(0, 3);
     const confidenceLabel = coverage.confidence === "high" ? "High" : coverage.confidence === "medium" ? "Medium" : "Low";
@@ -75,9 +75,9 @@ export function OverviewScreen() {
         />
         <StatCard
           label="Debt score"
-          value={String(stats.currentDebt)}
-          note="current (estimated from evidence)"
-          state={stats.currentDebt > 340 ? "rust" : "emerald"}
+          value={stats.currentDebt !== null ? String(stats.currentDebt) : "—"}
+          note={stats.currentDebt !== null ? "actual TODO/FIXME markers found" : "No debt markers found"}
+          state={stats.currentDebt !== null && stats.currentDebt > 5 ? "rust" : "emerald"}
         />
       </div>
 
@@ -175,18 +175,32 @@ export function OverviewScreen() {
         </div>
       )}
 
-      {/* Sparklines */}
+      {/* Sparklines — only render when data exists */}
       <div className="grid grid-cols-2 gap-4">
-        <SparklineCard
-          title="Commit cadence"
-          data={metrics.deployCadence.map((p) => p.value)}
-          color="var(--color-emerald)"
-        />
-        <SparklineCard
-          title="Debt trend"
-          data={metrics.debtTrend.map((p) => p.value)}
-          color="var(--color-rust)"
-        />
+        {metrics.deployCadence.length > 0 ? (
+          <SparklineCard
+            title="Commit cadence"
+            data={metrics.deployCadence.map((p) => p.value)}
+            color="var(--color-emerald)"
+          />
+        ) : (
+          <div className="rounded-sm border border-border bg-surface px-4 py-3">
+            <h3 className="mb-1 text-xs text-secondary">Commit cadence</h3>
+            <p className="text-xs text-muted">Insufficient data — commit history not available</p>
+          </div>
+        )}
+        {metrics.debtTrend.length > 0 ? (
+          <SparklineCard
+            title="Debt trend"
+            data={metrics.debtTrend.map((p) => p.value)}
+            color="var(--color-rust)"
+          />
+        ) : (
+          <div className="rounded-sm border border-border bg-surface px-4 py-3">
+            <h3 className="mb-1 text-xs text-secondary">Debt trend</h3>
+            <p className="text-xs text-muted">No TODO/FIXME/HACK markers found — no evidence of tracked debt</p>
+          </div>
+        )}
       </div>
 
       {/* Recent commits (NOT deploys — we don't have deployment evidence) */}

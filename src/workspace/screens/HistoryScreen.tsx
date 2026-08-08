@@ -48,6 +48,7 @@ export function HistoryScreen() {
           <h3 className="mb-2 text-sm font-medium text-secondary">Files that change together</h3>
           <p className="mb-2 text-xs text-muted">
             These file pairs frequently appear in the same commit — evidence of architectural coupling.
+            Sorted by Jaccard similarity coefficient (normalized co-change frequency).
           </p>
           <div className="flex flex-col gap-1">
             {topCoChanges.map((cc, i) => (
@@ -65,6 +66,16 @@ export function HistoryScreen() {
                 <span className="ml-auto whitespace-nowrap text-xs text-muted">
                   {cc.commitCount} co-change{cc.commitCount === 1 ? "" : "s"}
                 </span>
+                {cc.jaccard !== undefined && (
+                  <span className="whitespace-nowrap text-xs text-muted">
+                    J={cc.jaccard.toFixed(3)}
+                  </span>
+                )}
+                {cc.insufficientEvidence && (
+                  <span className="whitespace-nowrap text-xs text-amber">
+                    Insufficient evidence
+                  </span>
+                )}
               </div>
             ))}
           </div>

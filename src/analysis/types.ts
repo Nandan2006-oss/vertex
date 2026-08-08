@@ -201,6 +201,10 @@ export interface CoChange {
   fileB: string;
   commitCount: number;
   totalCommits: number;
+  /** Jaccard similarity coefficient — normalized coupling metric */
+  jaccard?: number;
+  /** Whether there is insufficient commit history for a reliable reading */
+  insufficientEvidence?: boolean;
 }
 
 /** Knowledge map for a contributor — evidence-based */
