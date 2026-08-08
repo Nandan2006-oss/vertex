@@ -1,5 +1,5 @@
 import { FormEvent, useRef, useState } from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, FlaskConical } from "lucide-react";
 import { SiGithub } from "react-icons/si";
 
 export type RepositorySource = "local" | "github";
@@ -14,6 +14,7 @@ export interface RepositoryInfo {
 
 interface RepositoryOnboardingProps {
   onAnalyze: (repo: RepositoryInfo, files?: File[]) => void;
+  onLoadDemo?: () => void;
 }
 
 /** Extract a display repo name from a GitHub URL, SSH form, or "owner/repo". */
@@ -36,7 +37,7 @@ function repoNameFromInput(input: string): string | null {
   return null;
 }
 
-export function RepositoryOnboarding({ onAnalyze }: RepositoryOnboardingProps) {
+export function RepositoryOnboarding({ onAnalyze, onLoadDemo }: RepositoryOnboardingProps) {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [showGithubForm, setShowGithubForm] = useState(false);
   const [githubUrl, setGithubUrl] = useState("");
@@ -159,6 +160,25 @@ export function RepositoryOnboarding({ onAnalyze }: RepositoryOnboardingProps) {
             </p>
           )}
         </form>
+      )}
+
+      {onLoadDemo && (
+        <div className="mt-8 w-full border-t border-border pt-6">
+          <p className="mb-3 text-xs text-muted">
+            Or explore the workspace with pre-loaded data.
+          </p>
+          <button
+            type="button"
+            onClick={onLoadDemo}
+            className="group inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-surface px-5 py-2.5 text-sm transition-all duration-150 ease-out-soft hover:bg-raised hover:border-foreground/30 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+          >
+            <FlaskConical
+              className="h-4 w-4 text-secondary transition-colors group-hover:text-foreground"
+              aria-hidden="true"
+            />
+            <span className="text-foreground">Try with demo data</span>
+          </button>
+        </div>
       )}
 
       <input

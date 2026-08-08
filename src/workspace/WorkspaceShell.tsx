@@ -13,6 +13,7 @@ import { Brand } from "../components/Brand";
 import { runAnalysis } from "../analysis/run";
 import AnalysisContext from "../analysis/AnalysisContext";
 import type { RepositoryAnalysis } from "../analysis/types";
+import { demoAnalysis } from "../demo-data/analysis";
 
 import { RepositoryOnboarding, type RepositoryInfo } from "./RepositoryOnboarding";
 import { AnalysisProgress } from "./AnalysisProgress";
@@ -128,6 +129,13 @@ export function WorkspaceShell({ theme: themeProp, onToggleTheme, onExit }: Work
     setAnalysis(null);
   }, []);
 
+  const handleLoadDemo = useCallback(() => {
+    setRepoName(demoAnalysis.name);
+    setAnalysis(demoAnalysis);
+    setActiveScreen("overview");
+    setView("dashboard");
+  }, []);
+
   // ── Derived state ──
   const currentHash = useMemo(() => {
     if (!analysis) return "—";
@@ -153,6 +161,7 @@ export function WorkspaceShell({ theme: themeProp, onToggleTheme, onExit }: Work
         <main className="flex flex-1 items-center justify-center overflow-auto p-6">
           <RepositoryOnboarding
             onAnalyze={(repo, files) => handleAnalyze(repo, files)}
+            onLoadDemo={handleLoadDemo}
           />
         </main>
       </div>
