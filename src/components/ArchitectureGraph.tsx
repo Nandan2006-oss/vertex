@@ -186,7 +186,17 @@ export function ArchitectureGraph({
     setHovered(node);
   };
 
-  if (services.length === 0) return null;
+  if (services.length === 0) {
+    return (
+      <div
+        ref={containerRef}
+        className={`flex items-center justify-center rounded-sm border border-border bg-surface ${className ?? ""}`}
+        style={{ height }}
+      >
+        <p className="text-sm text-muted">No dependency relationships could be established.</p>
+      </div>
+    );
+  }
 
   return (
     <div ref={containerRef} className={`relative ${className ?? ""}`}>

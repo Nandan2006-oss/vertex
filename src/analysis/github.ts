@@ -720,7 +720,6 @@ function buildModulesFromSource(
       const bLoc = b[1].reduce((s, f) => s + (f.loc ?? 0), 0);
       return bLoc - aLoc;
     })
-    .slice(0, 12)
     .map(([id, files]) => {
       const loc = files.reduce((s, f) => s + (f.loc ?? 0), 0);
       // REAL 30-day commit count (not estimated)

@@ -18,7 +18,6 @@ import type {
   ChurnRecord,
   CoChange,
   ContributorKnowledge,
-  ModuleRisk,
   DebtEvidence,
   EvidenceItem,
   FrameworkInfo,
@@ -31,7 +30,12 @@ import type {
 import { buildLanguages, detectLanguage } from "./languages";
 import { classifyFile, groupByCategory } from "./classify";
 import { parseImports, importsToDependencies, detectImportParser } from "./imports";
-import { buildCoverage, estimateComplexity } from "./metrics";
+import {
+  buildCoverage,
+  estimateComplexity,
+  calculateModuleRisks,
+  buildContributorKnowledge,
+} from "./metrics";
 
 const IGNORED_PATHS = new Set([
   "node_modules", ".git", ".next", ".nuxt", ".cache",
@@ -285,18 +289,20 @@ export async function analyzeLocalRepository(
   const churn: ChurnRecord[] = [];
   const coChanges: CoChange[] = [];
   const commits: RepositoryAnalysis["commits"] = [];
-  const contributorKnowledge: ContributorKnowledge[] = contributors.length > 0
-    ? contributors.map((c) => ({
-        name: c.name,
-        commits: c.commits,
-        filesChanged: 0,
-        linesChanged: null,
-        linesAdded: 0,
-        linesDeleted: 0,
-        modulesTouched: [],
-        primaryModules: [],
-      }))
-    : [];
+  const contributorKnowledge: ContributorKnowledge[] = commits.length > 0
+    ? buildContributorKnowledge(commits, services)
+    : contributors.length > 0
+      ? contributors.map((c) => ({
+          name: c.name,
+          commits: c.commits,
+          filesChanged: 0,
+          linesChanged: null,
+          linesAdded: 0,
+          linesDeleted: 0,
+          modulesTouched: [],
+          primaryModules: [],
+        }))
+      : [];
 
   // Metrics: commit cadence is unavailable (no timestamp data from git logs)
   // Debt trend: unavailable unless we have TODO/FIXME markers
@@ -308,42 +314,32 @@ export async function analyzeLocalRepository(
   // Tech debt: based ONLY on large files from the scan (no fabricated scores)
   const techDebt = buildTechDebtItems(classifiedFiles);
 
-  // Module risks: use real dependency counts and complexity estimates
-  const moduleRisks: ModuleRisk[] = services.map((svc) => {
-    const svcSourceFiles = classifiedFiles.filter(
-      (f) => f.path.startsWith(svc.id),
-    );
-    const svcLoc = svcSourceFiles.reduce((s, f) => s + (f.loc ?? 0), 0);
-    const svcFileCount = svcSourceFiles.length;
-    const complexities = svcSourceFiles
-      .map((f) => f.complexityEstimate)
-      .filter((c): c is number => c !== null);
-    const avgComplexity = complexities.length > 0
-      ? Math.round(complexities.reduce((a, b) => a + b, 0) / complexities.length)
-      : 0;
+  // Build contributor count per module from git data (if available)
+  const moduleContributorCounts = new Map<string, Set<string>>();
+  for (const c of commits) {
+    for (const file of c.files ?? []) {
+      for (const svc of services) {
+        if (file.startsWith(svc.id) || svc.files.includes(file)) {
+          if (!moduleContributorCounts.has(svc.id)) {
+            moduleContributorCounts.set(svc.id, new Set());
+          }
+          moduleContributorCounts.get(svc.id)!.add(c.author);
+        }
+      }
+    }
+  }
+  const contributorCountMap = new Map<string, number>();
+  for (const [moduleId, authors] of moduleContributorCounts) {
+    contributorCountMap.set(moduleId, authors.size);
+  }
 
-    const depsFromModule = allRealDeps.filter((d) =>
-      svc.files.some((mf) => d.fromFile === mf || d.fromFile.startsWith(svc.id)),
-    );
-    const depsToModule = allRealDeps.filter((d) =>
-      svc.files.some((mf) => d.toFile === mf || d.toFile.startsWith(svc.id)),
-    );
-
-    return {
-      moduleName: svc.name,
-      riskScore: 0,
-      factors: [],
-      loc: svcLoc,
-      fileCount: svcFileCount,
-      complexityEstimate: avgComplexity,
-      churn: 0,
-      dependencyCount: depsFromModule.length,
-      dependentCount: depsToModule.length,
-      contributorCount: 0,
-      isGodModule: false,
-      reasons: [],
-    };
-  });
+  // Module risks: use shared evidence-based risk calculator
+  // (passes empty churn and commits when git data is unavailable — risk factors
+  //  that need commit history report 0 or "Unavailable", which is honest.)
+  const moduleRisks = calculateModuleRisks(
+    services, churn, sourceFiles, allRealDeps, commits, contributorCountMap,
+  );
+  const riskyModules = moduleRisks.filter((r) => r.riskScore > 30).slice(0, 10);
 
   const evidence: EvidenceItem[] = [];
   const frameInfo: FrameworkInfo | null = null;
@@ -394,7 +390,7 @@ export async function analyzeLocalRepository(
     coChanges,
     techDebt,
     moduleRisks,
-    riskyModules: moduleRisks.filter((r) => r.riskScore > 50).slice(0, 5),
+    riskyModules,
     fileTree: fileNodes,
     evidence,
     onboardingGuide: onboardGuide,
@@ -422,7 +418,6 @@ function buildModules(
   return [...tops.entries()]
     .filter(([, arr]) => arr.length > 0)
     .sort((a, b) => b[1].length - a[1].length)
-    .slice(0, 10)
     .map(([id, arr]) => {
       const svcFiles = classifiedFiles.filter((cf) => cf.path.startsWith(id));
       const realLoc = svcFiles.reduce((s, cf) => s + (cf.loc ?? 0), 0);
