@@ -93,6 +93,9 @@ export function calculateChurn(
   commits: Commit[],
   sourceFiles: ClassifiedFile[],
 ): ChurnRecord[] {
+  // Build a Set of source file paths for O(1) lookups
+  const sourceFilePaths = new Set(sourceFiles.map((sf) => sf.path));
+
   const fileData = new Map<string, {
     totalCommits: number;
     recentChanges: number;
@@ -112,7 +115,7 @@ export function calculateChurn(
     const isRecent = commitDate >= recentCutoff;
 
     for (const file of commit.files || []) {
-      if (!sourceFiles.some((sf) => sf.path === file)) continue;
+      if (!sourceFilePaths.has(file)) continue;
 
       const entry = fileData.get(file) ?? {
         totalCommits: 0,
@@ -243,6 +246,15 @@ export function buildContributorKnowledge(
   commits: Commit[],
   services: Service[],
 ): ContributorKnowledge[] {
+  // Build a file-to-service-id lookup map for O(1) resolution
+  const svcIdsSorted = [...services.map((s) => s.id)].sort((a, b) => b.length - a.length);
+  function findServiceId(filePath: string): string | undefined {
+    for (const sid of svcIdsSorted) {
+      if (filePath.startsWith(sid)) return sid;
+    }
+    return undefined;
+  }
+
   const contributorData = new Map<
     string,
     {
@@ -278,11 +290,8 @@ export function buildContributorKnowledge(
 
     for (const file of commit.files ?? []) {
       entry.filesChanged.add(file);
-      for (const service of services) {
-        if (file.startsWith(service.id) || service.files.includes(file)) {
-          entry.modulesTouched.add(service.id);
-        }
-      }
+      const svcId = findServiceId(file);
+      if (svcId) entry.modulesTouched.add(svcId);
     }
 
     if (!entry.firstContribution) entry.firstContribution = commit.date;

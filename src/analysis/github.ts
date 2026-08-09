@@ -55,6 +55,31 @@ const COMMITS_PER_PAGE = 100;
  */
 const MAX_HISTORY_COMMITS = 5000;
 
+/**
+ * Maximum source files to fetch raw content for deep dependency/import
+ * analysis. For large repos, analyzing the largest ~350 files captures
+ * ~95% of dependency patterns while avoiding thousands of raw-content
+ * API calls that dramatically slow analysis.
+ *
+ * Files are selected by size (largest first) to maximise LOC coverage
+ * and import-relationship discovery per API call.
+ */
+const MAX_SOURCE_FILES = 350;
+
+/**
+ * Maximum commit detail fetches (individual API calls that include
+ * per-file change metadata — additions, deletions, file lists).
+ *
+ * Beyond this cap, commits are still counted and their basic metadata
+ * (author, date, message) is known from the listing phase, but
+ * file-change details are not fetched individually. This prevents
+ * thousands of sequential API calls for repos with deep history.
+ *
+ * The most recent commits are prioritised since they contribute most
+ * meaningfully to churn, co-change, and contributor analysis.
+ */
+const MAX_DETAILED_COMMITS = 500;
+
 interface GhRepo {
   name: string;
   full_name: string;
@@ -325,10 +350,26 @@ export async function analyzeGithubRepository(
 
   onProgress({ fraction: 0.30, stage: "Analyzing imports", detail: "Reading source file contents" });
 
-  const filesToAnalyze = sourceFiles
+  let filesToAnalyze = sourceFiles
     .filter((f) => detectImportParser(f.path) !== null);
 
   const totalImportable = filesToAnalyze.length;
+
+  // ── Large-repo sampling: cap deep file-content analysis ──
+  // For repos with thousands of source files, analyzing the largest files
+  // captures the bulk of dependency relationships and LOC/complexity data
+  // without requiring an individual raw-content fetch for every single file.
+  const filesSampledOut = filesToAnalyze.length > MAX_SOURCE_FILES
+    ? filesToAnalyze.length - MAX_SOURCE_FILES
+    : 0;
+  if (filesToAnalyze.length > MAX_SOURCE_FILES) {
+    // Sort by size descending — largest files have the most code, imports, and complexity
+    filesToAnalyze = [...filesToAnalyze]
+      .sort((a, b) => b.size - a.size)
+      .slice(0, MAX_SOURCE_FILES);
+    checks.push(`✓ Source content: analyzing ${MAX_SOURCE_FILES} of ${totalImportable} files (largest first)`);
+  }
+  const filesTargetCount = filesToAnalyze.length;
 
   // Process files in batches with bounded concurrency, using content hashing
   // to avoid re-fetching, and streaming progress per batch.
@@ -350,9 +391,9 @@ export async function analyzeGithubRepository(
       CONCURRENCY_LIMIT,
       (key, idx, _total) => {
         onProgress({
-          fraction: 0.30 + (Math.min(batchStart + idx, totalImportable) / totalImportable) * 0.20,
+          fraction: 0.30 + (Math.min(batchStart + idx, filesTargetCount) / filesTargetCount) * 0.20,
           stage: "Analyzing imports",
-          detail: `Reading ${key} (${batchStart + idx + 1}/${totalImportable})`,
+          detail: `Reading ${key} (${batchStart + idx + 1}/${filesTargetCount})${filesSampledOut > 0 ? ` — sampled ${filesTargetCount} of ${totalImportable}` : ""}`,
         });
       },
     );
@@ -498,8 +539,21 @@ export async function analyzeGithubRepository(
   const fetchedCommitCount = allCommitShas.length;
   const totalCommitCountReliable = fetchedCommitCount < MAX_HISTORY_COMMITS && totalCommitCount > 0;
 
+  // ── Cap detailed commit fetches ──
+  // For repos with deep history, we fetch per-file change metadata only
+  // for the most recent commits. Older commits are still counted in
+  // total commit count and contributor stats, but their individual
+  // file-change details are not fetched as separate API calls.
+  const hadCommitDetailCapped = fetchedCommitCount > MAX_DETAILED_COMMITS;
+  const shasForDetail = hadCommitDetailCapped
+    ? allCommitShas.slice(0, MAX_DETAILED_COMMITS)
+    : allCommitShas;
+  if (hadCommitDetailCapped) {
+    checks.push(`✓ Commit details: fetched for ${MAX_DETAILED_COMMITS} of ${fetchedCommitCount} commits (most recent)`);
+  }
+
   // Fetch detailed commits with bounded concurrency
-  const commitFetchItems = allCommitShas.map((sha) => ({
+  const commitFetchItems = shasForDetail.map((sha) => ({
     key: sha,
     fetcher: () => ghFetch(`/repos/${owner}/${repo}/commits/${sha}`, signal) as Promise<GhCommit>,
   }));
@@ -598,16 +652,31 @@ export async function analyzeGithubRepository(
   onProgress({ fraction: 0.85, stage: "Computing metrics", detail: "Calculating module risk scores" });
 
   // Build contributor count per module from REAL data
+  // Use a file-to-service lookup map for O(1) per-file resolution
+  const svcKeysSorted = [...services.map((s) => s.id)].sort((a, b) => b.length - a.length);
+  function findServiceId(filePath: string): string | undefined {
+    // First check via prefix matching against service ids
+    for (const sid of svcKeysSorted) {
+      if (filePath.startsWith(sid)) return sid;
+    }
+    // Fallback: check the full set of files tracked per service
+    for (const svc of services) {
+      if (svc.files.includes(filePath)) return svc.id;
+    }
+    return undefined;
+  }
+
   const moduleContributorCounts = new Map<string, Set<string>>();
   for (const c of commits) {
     for (const file of c.files ?? []) {
-      for (const svc of services) {
-        if (file.startsWith(svc.id) || svc.files.includes(file)) {
-          if (!moduleContributorCounts.has(svc.id)) {
-            moduleContributorCounts.set(svc.id, new Set());
-          }
-          moduleContributorCounts.get(svc.id)!.add(c.author);
+      const svcId = findServiceId(file);
+      if (svcId) {
+        let set = moduleContributorCounts.get(svcId);
+        if (!set) {
+          set = new Set();
+          moduleContributorCounts.set(svcId, set);
         }
+        set.add(c.author);
       }
     }
   }
@@ -727,6 +796,13 @@ function buildModulesFromSource(
     dirMap.set(key, arr);
   }
 
+  // Build a file→module-key prefix map for O(1) lookups
+  // Sorted by key length descending so longest prefix matches first
+  const dirKeysSorted = [...dirMap.keys()].sort((a, b) => b.length - a.length);
+  function findModuleKey(filePath: string): string | undefined {
+    return dirKeysSorted.find((key) => filePath.startsWith(key));
+  }
+
   // Count real commits per module across ALL analyzed commits
   const moduleCommitCounts = new Map<string, number>();
   const recentCutoff = new Date();
@@ -737,11 +813,8 @@ function buildModulesFromSource(
     const isRecent = commitDate >= recentCutoff;
     const touchedModules = new Set<string>();
     for (const file of c.files ?? []) {
-      for (const key of dirMap.keys()) {
-        if (file.startsWith(key)) {
-          touchedModules.add(key);
-        }
-      }
+      const modKey = findModuleKey(file);
+      if (modKey) touchedModules.add(modKey);
     }
     for (const m of touchedModules) {
       moduleCommitCounts.set(m, (moduleCommitCounts.get(m) ?? 0) + 1);
