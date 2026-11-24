@@ -25,7 +25,6 @@ function repoNameFromInput(input: string): string | null {
   let cleaned = trimmed;
   if (/^(?:https?:\/\/|git@|ssh:\/\/)/i.test(cleaned)) {
     cleaned = cleaned.replace(/^(?:https?:\/\/|git@|ssh:\/\/)/i, "");
-    // Drop the host portion ("github.com/" or "github.com:")
     cleaned = cleaned.replace(/^[^/\s:]+[/:]/i, "");
   }
   cleaned = cleaned.replace(/\.git$/i, "").replace(/\/+$/, "");
@@ -43,9 +42,7 @@ export function RepositoryOnboarding({ onAnalyze, onLoadDemo }: RepositoryOnboar
   const [githubUrl, setGithubUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const handleFolderPicked = (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
+  const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
       const fileList = Array.from(files);
@@ -60,7 +57,6 @@ export function RepositoryOnboarding({ onAnalyze, onLoadDemo }: RepositoryOnboar
         fileList,
       );
     }
-    // Reset so picking the same folder again still fires `change`.
     e.target.value = "";
   };
 
@@ -69,7 +65,7 @@ export function RepositoryOnboarding({ onAnalyze, onLoadDemo }: RepositoryOnboar
     const name = repoNameFromInput(githubUrl);
     if (!name) {
       setError(
-        "That doesn't look like a repository. Try a URL like https://github.com/acme/api",
+        "That doesn't look like a valid repository URL. Try a format like https://github.com/facebook/react",
       );
       return;
     }
@@ -78,122 +74,106 @@ export function RepositoryOnboarding({ onAnalyze, onLoadDemo }: RepositoryOnboar
   };
 
   return (
-    <div className="animate-fade-in flex w-full max-w-xl flex-col items-center px-6 py-12 text-center">
+    <div className="animate-fade-in flex w-full max-w-xl flex-col items-center px-4 py-8 text-center">
+      {/* Title */}
       <h1 className="font-display text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
-        Analyze a Repository
+        Connect a Codebase
       </h1>
-      <p className="mt-3 text-secondary">
-        Understand your codebase&apos;s evolution.
+      <p className="mt-2 text-sm text-secondary max-w-md">
+        Extract architecture topology, dependency trees, git churn, and technical debt from real code evidence.
       </p>
 
-      <div className="mt-10 grid w-full gap-4 sm:grid-cols-2">
+      {/* Primary 2 Actions */}
+      <div className="mt-8 grid w-full gap-4 sm:grid-cols-2">
         <button
           type="button"
           onClick={() => folderInputRef.current?.click()}
-          className="group flex cursor-pointer flex-col items-center gap-2 rounded-sm border border-border bg-surface p-6 text-center transition-all duration-150 ease-out-soft hover:bg-raised hover:border-foreground/30 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+          className="group flex cursor-pointer flex-col items-center gap-3 rounded-md border border-border bg-surface p-6 text-center transition-all hover:border-accent/50 hover:bg-raised shadow-2xs"
         >
-          <FolderOpen
-            className="h-6 w-6 text-secondary transition-colors group-hover:text-foreground"
-            aria-hidden="true"
-          />
-          <span className="text-sm font-medium text-foreground">
-            Analyze Local Repository
-          </span>
-          <span className="text-xs text-muted">
-            Pick a folder from your computer
-          </span>
+          <div className="flex h-11 w-11 items-center justify-center rounded-sm bg-accent-muted text-accent group-hover:scale-105 transition-transform">
+            <FolderOpen className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-foreground">
+              Local Repository Folder
+            </span>
+            <span className="text-xs text-muted mt-0.5">
+              Select a project from your machine
+            </span>
+          </div>
         </button>
 
         <button
           type="button"
           onClick={() => setShowGithubForm((v) => !v)}
           aria-expanded={showGithubForm}
-          aria-controls="github-repo-form"
-          className="group flex cursor-pointer flex-col items-center gap-2 rounded-sm border border-border bg-surface p-6 text-center transition-all duration-150 ease-out-soft hover:bg-raised hover:border-foreground/30 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+          className="group flex cursor-pointer flex-col items-center gap-3 rounded-md border border-border bg-surface p-6 text-center transition-all hover:border-accent/50 hover:bg-raised shadow-2xs"
         >
-          <SiGithub
-            className="h-6 w-6 text-secondary transition-colors group-hover:text-foreground"
-            aria-hidden="true"
-          />
-          <span className="text-sm font-medium text-foreground">
-            Analyze GitHub Repository
-          </span>
-          <span className="text-xs text-muted">Paste a repository URL</span>
+          <div className="flex h-11 w-11 items-center justify-center rounded-sm bg-raised text-foreground group-hover:scale-105 transition-transform">
+            <SiGithub className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-foreground">
+              GitHub Repository
+            </span>
+            <span className="text-xs text-muted mt-0.5">
+              Analyze public URL with full git history
+            </span>
+          </div>
         </button>
       </div>
 
+      {/* GitHub URL Input Form */}
       {showGithubForm && (
         <form
-          id="github-repo-form"
           onSubmit={handleGithubSubmit}
-          className="mt-6 w-full"
+          className="mt-4 w-full animate-slide-up rounded-md border border-border bg-surface p-4 shadow-sm"
         >
-          <div className="flex gap-2">
-            <label htmlFor="github-url" className="sr-only">
-              Repository URL
-            </label>
+          <div className="flex flex-col sm:flex-row gap-2">
             <input
-              id="github-url"
-              type="url"
-              inputMode="url"
+              type="text"
               autoFocus
               value={githubUrl}
-              onChange={(e) => {
-                setGithubUrl(e.target.value);
-                if (error) setError(null);
-              }}
-              placeholder="https://github.com/acme/api"
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? "github-repo-error" : undefined}
-              className="min-w-0 flex-1 rounded-sm border border-border bg-surface px-3 py-2.5 font-mono text-sm text-foreground placeholder:text-muted transition-colors duration-150 focus:border-foreground focus:outline-none"
+              onChange={(e) => setGithubUrl(e.target.value)}
+              placeholder="https://github.com/owner/repository"
+              className="flex-1 rounded-xs border border-border bg-raised/50 px-3 py-2 text-xs font-mono text-foreground placeholder:text-muted focus:border-accent focus:outline-hidden"
             />
             <button
               type="submit"
-              className="inline-flex cursor-pointer items-center gap-2 rounded-sm bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-all duration-150 ease-out-soft hover:opacity-90 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+              className="cursor-pointer rounded-xs bg-accent px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 active:scale-95 shrink-0"
             >
-              Analyze
+              Start Analysis
             </button>
           </div>
-          {error && (
-            <p id="github-repo-error" role="alert" className="mt-2 text-sm text-rust">
-              {error}
-            </p>
-          )}
+          {error && <p className="mt-2 text-left text-xs text-rust font-medium">{error}</p>}
         </form>
       )}
 
+      {/* Demo Project Alternative */}
       {onLoadDemo && (
-        <div className="mt-8 w-full border-t border-border pt-6">
-          <p className="mb-3 text-xs text-muted">
-            Or explore the workspace with pre-loaded data.
-          </p>
+        <div className="mt-6 flex flex-col items-center gap-2">
+          <span className="text-xs text-muted">or explore without onboarding code</span>
           <button
             type="button"
             onClick={onLoadDemo}
-            className="group inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-surface px-5 py-2.5 text-sm transition-all duration-150 ease-out-soft hover:bg-raised hover:border-foreground/30 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+            className="flex cursor-pointer items-center gap-2 rounded-xs border border-border bg-raised/60 px-3 py-1.5 text-xs text-secondary hover:text-foreground hover:bg-raised transition-colors"
           >
-            <FlaskConical
-              className="h-4 w-4 text-secondary transition-colors group-hover:text-foreground"
-              aria-hidden="true"
-            />
-            <span className="text-foreground">Try with demo data</span>
+            <FlaskConical className="h-3.5 w-3.5 text-accent" />
+            <span>Load Pre-computed Demo Architecture</span>
           </button>
         </div>
       )}
 
+      {/* Hidden Folder Input */}
       <input
-        ref={(el) => {
-          folderInputRef.current = el;
-          // Non-standard attribute — set on the DOM node directly so the
-          // picker opens in directory mode without polluting React's types.
-          if (el) el.setAttribute("webkitdirectory", "");
-        }}
+        ref={folderInputRef}
         type="file"
+        // @ts-expect-error webkitdirectory is standard in browser engines
+        webkitdirectory=""
+        directory=""
         multiple
         className="hidden"
         onChange={handleFolderPicked}
-        tabIndex={-1}
-        aria-hidden="true"
       />
     </div>
   );

@@ -1,419 +1,456 @@
-import { useState } from "react";
-import { useAnalysis } from "../../analysis/AnalysisContext";
+import { useState, useMemo, useEffect } from "react";
+import {
+  Search,
+  X,
+  Crosshair,
+  FileCode,
+  ArrowDownRight,
+  ArrowUpRight,
+  ArrowRight,
+  ShieldCheck,
+} from "lucide-react";
+import { useAnalysis, useWorkspaceNav } from "../../analysis/AnalysisContext";
 import { ArchitectureGraph } from "../../components/ArchitectureGraph";
 import { EmptyState } from "../EmptyState";
+import type { ServiceState } from "../../analysis/types";
 
 export function ArchitectureScreen() {
   const analysis = useAnalysis();
-  const { services, dependencies, internalDependencies, externalDependencies, sourceFiles, moduleRisks, contributorCount } = analysis;
-  const [selectedModule, setSelectedModule] = useState<string | null>(null);
+  const { selectedEntity, setSelectedEntity } = useWorkspaceNav();
+  const {
+    services,
+    dependencies,
+    internalDependencies,
+    sourceFiles,
+    moduleRisks,
+  } = analysis;
+
+  const [selectedModule, setSelectedModule] = useState<string | null>(selectedEntity);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<"all" | ServiceState>("all");
+  const [isolateMode, setIsolateMode] = useState(false);
+  const [fileSearchQuery, setFileSearchQuery] = useState("");
+
+  // Sync external navigation entity
+  useEffect(() => {
+    if (selectedEntity) {
+      // Check if matches a service
+      const found = services.find((s) => s.id === selectedEntity || s.name === selectedEntity);
+      if (found) {
+        setSelectedModule(found.id);
+      }
+    }
+  }, [selectedEntity, services]);
+
   const totalDeps = dependencies.length;
   const totalInternalEdges = internalDependencies.length;
-  const totalExternalLibs = externalDependencies.length;
 
   // Compute module statistics from REAL dependency data
-  const moduleStats = services.map((svc) => {
-    const filesInModule = svc.files;
-    const depsFrom = dependencies.filter((d) => d.from === svc.id);
-    const depsTo = dependencies.filter((d) => d.to === svc.id);
-    const internalFrom = internalDependencies.filter((d) =>
-      filesInModule.some((f) => d.from === f || d.from.startsWith(svc.id)),
+  const moduleStats = useMemo(() => {
+    return services.map((svc) => {
+      const filesInModule = svc.files;
+      const depsFrom = dependencies.filter((d) => d.from === svc.id);
+      const depsTo = dependencies.filter((d) => d.to === svc.id);
+      const internalFrom = internalDependencies.filter((d) =>
+        filesInModule.some((f) => d.from === f || d.from.startsWith(svc.id)),
+      );
+      const internalTo = internalDependencies.filter((d) =>
+        filesInModule.some((f) => d.to === f || d.to.startsWith(svc.id)),
+      );
+      const svcFiles = sourceFiles.filter((f) =>
+        filesInModule.some((mf) => f.path === mf || f.path.startsWith(svc.id)),
+      );
+      const svcLoc = svcFiles.reduce((s, f) => s + (f.loc ?? 0), 0);
+
+      const validComplexities = svcFiles
+        .map((f) => f.complexityEstimate)
+        .filter((c): c is number => c !== null);
+      const avgComplexity =
+        validComplexities.length > 0
+          ? Math.round(
+              validComplexities.reduce((s, c) => s + c, 0) / validComplexities.length,
+            )
+          : 0;
+
+      return {
+        id: svc.id,
+        name: svc.name,
+        state: svc.state,
+        loc: svcLoc > 0 ? svcLoc : svc.loc,
+        fileCount: filesInModule.length,
+        fanOut: depsFrom.length,
+        fanIn: depsTo.length,
+        internalFromCount: internalFrom.length,
+        internalToCount: internalTo.length,
+        files: svcFiles.map((f) => f.path),
+        complexityEstimate: avgComplexity,
+        complexityFiles: validComplexities.length,
+      };
+    });
+  }, [services, dependencies, internalDependencies, sourceFiles]);
+
+  const highFanIn = useMemo(
+    () =>
+      [...moduleStats]
+        .filter((m) => m.fanIn >= 1)
+        .sort((a, b) => b.fanIn - a.fanIn)
+        .slice(0, 4),
+    [moduleStats],
+  );
+
+  const highFanOut = useMemo(
+    () =>
+      [...moduleStats]
+        .filter((m) => m.fanOut >= 1)
+        .sort((a, b) => b.fanOut - a.fanOut)
+        .slice(0, 4),
+    [moduleStats],
+  );
+
+  // Selected module details
+  const selectedDetail = useMemo(
+    () => (selectedModule ? moduleStats.find((m) => m.id === selectedModule || m.name === selectedModule) : null),
+    [selectedModule, moduleStats],
+  );
+
+  const selectedRisk = useMemo(
+    () =>
+      selectedModule
+        ? moduleRisks.find((r) => r.moduleName === selectedModule || r.moduleName === selectedDetail?.name)
+        : null,
+    [selectedModule, moduleRisks, selectedDetail],
+  );
+
+  const selectedDepsFrom = useMemo(
+    () =>
+      selectedModule
+        ? dependencies.filter((d) => d.from === selectedModule || d.from === selectedDetail?.id)
+        : [],
+    [selectedModule, dependencies, selectedDetail],
+  );
+
+  const selectedDepsTo = useMemo(
+    () =>
+      selectedModule
+        ? dependencies.filter((d) => d.to === selectedModule || d.to === selectedDetail?.id)
+        : [],
+    [selectedModule, dependencies, selectedDetail],
+  );
+
+  // Filtered files in selected module
+  const filteredFilesInModule = useMemo(() => {
+    if (!selectedDetail) return [];
+    if (!fileSearchQuery.trim()) return selectedDetail.files;
+    const q = fileSearchQuery.toLowerCase();
+    return selectedDetail.files.filter((f) => f.toLowerCase().includes(q));
+  }, [selectedDetail, fileSearchQuery]);
+
+  if (services.length === 0) {
+    return (
+      <EmptyState
+        title="Architecture data unavailable"
+        body="No modules could be identified. Modules are derived from repository directory structure and import relationships."
+      />
     );
-    const internalTo = internalDependencies.filter((d) =>
-      filesInModule.some((f) => d.to === f || d.to.startsWith(svc.id)),
-    );
-    const svcFiles = sourceFiles.filter((f) =>
-      filesInModule.some((mf) => f.path === mf || f.path.startsWith(svc.id)),
-    );
-    const svcLoc = svcFiles.reduce((s, f) => s + (f.loc ?? 0), 0);
-
-    // Complexity from actual file analysis
-    const validComplexities = svcFiles
-      .map((f) => f.complexityEstimate)
-      .filter((c): c is number => c !== null);
-    const avgComplexity = validComplexities.length > 0
-      ? Math.round(validComplexities.reduce((s, c) => s + c, 0) / validComplexities.length)
-      : 0;
-
-    return {
-      name: svc.name,
-      state: svc.state,
-      loc: svcLoc,
-      fileCount: filesInModule.length,
-      fanOut: depsFrom.length,
-      fanIn: depsTo.length,
-      internalFromCount: internalFrom.length,
-      internalToCount: internalTo.length,
-      files: svcFiles.map((f) => f.path),
-      complexityEstimate: avgComplexity,
-      complexityFiles: validComplexities.length,
-    };
-  });
-
-  const highFanIn = moduleStats.filter((m) => m.fanIn >= 2).sort((a, b) => b.fanIn - a.fanIn).slice(0, 5);
-  const highFanOut = moduleStats.filter((m) => m.fanOut >= 2).sort((a, b) => b.fanOut - a.fanOut).slice(0, 5);
-  const hubs = moduleStats.filter((m) => m.fanIn >= 2 && m.fanOut >= 2).slice(0, 5);
-
-  // Detail for selected module
-  const selectedDetail = selectedModule
-    ? moduleStats.find((m) => m.name === selectedModule)
-    : null;
-  const selectedRisk = selectedModule
-    ? moduleRisks.find((r) => r.moduleName === selectedModule)
-    : null;
-  const selectedDepsFrom = selectedModule
-    ? dependencies.filter((d) => d.from === selectedModule)
-    : [];
-  const selectedDepsTo = selectedModule
-    ? dependencies.filter((d) => d.to === selectedModule)
-    : [];
+  }
 
   return (
-    <div className="flex flex-1 flex-col gap-6">
-      <p className="text-sm text-secondary">
-        Module structure built from real dependency relationships. Each node is a module; edges represent import/include relationships.
-        {services.length > 30 && (
-          <span className="ml-2 text-xs text-amber">Showing {services.length} modules — large graph.</span>
-        )}
-      </p>
+    <div className="flex flex-1 flex-col gap-4 min-w-0">
+      {/* Top Filter & Search Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface p-2.5 shadow-2xs">
+        {/* Search Input */}
+        <div className="relative w-full sm:w-64">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+          <input
+            type="text"
+            placeholder="Filter modules by name…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-xs border border-border bg-raised/50 py-1.5 pl-8 pr-3 text-xs text-foreground placeholder:text-muted focus:border-accent/50 focus:outline-hidden transition-colors"
+          />
+        </div>
 
-      {/* Coverage / data summary */}
-      <div className="rounded-sm border border-border bg-surface px-4 py-2 text-xs text-muted">
-        {services.length > 0 ? (
-          <span>
-            {services.length} module{services.length !== 1 ? "s" : ""} ·{" "}
-            {totalDeps > 0 ? `${totalDeps} module edge(s)` : "No module-level dependency edges"} ·{" "}
-            {totalInternalEdges > 0 ? `${totalInternalEdges} internal file relationship(s)` : "No file-level imports detected"} ·{" "}
-            {totalExternalLibs > 0 ? `${totalExternalLibs} external libraries` : "No external dependencies"} ·{" "}
-            {contributorCount > 0 ? `${contributorCount} contributor(s)` : "Contributors: Unavailable"}
-          </span>
-        ) : (
-          <span>Architecture data unavailable or incomplete.</span>
-        )}
+        {/* State Filter Tabs */}
+        <div className="flex items-center gap-1 rounded-xs border border-border bg-raised/40 p-0.5">
+          {(["all", "healthy", "evolving", "at-risk"] as const).map((st) => (
+            <button
+              key={st}
+              type="button"
+              onClick={() => setStateFilter(st)}
+              className={`cursor-pointer rounded-xs px-2.5 py-1 text-xs capitalize transition-all ${
+                stateFilter === st
+                  ? "bg-surface text-foreground font-semibold shadow-2xs"
+                  : "text-muted hover:text-secondary"
+              }`}
+            >
+              {st}
+            </button>
+          ))}
+        </div>
+
+        {/* Quick Hub Jump Chips */}
+        <div className="hidden xl:flex items-center gap-2 text-xs text-muted">
+          <span className="text-[11px] font-mono">Hubs:</span>
+          {highFanIn.slice(0, 2).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setSelectedModule(m.id)}
+              className="cursor-pointer rounded-xs border border-border bg-raised/30 px-2 py-0.5 font-mono text-[11px] text-secondary hover:border-accent/40 hover:text-foreground transition-colors"
+            >
+              ↓ {m.name} ({m.fanIn})
+            </button>
+          ))}
+          {highFanOut.slice(0, 2).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setSelectedModule(m.id)}
+              className="cursor-pointer rounded-xs border border-border bg-raised/30 px-2 py-0.5 font-mono text-[11px] text-secondary hover:border-accent/40 hover:text-foreground transition-colors"
+            >
+              ↑ {m.name} ({m.fanOut})
+            </button>
+          ))}
+        </div>
       </div>
 
-      {services.length === 0 ? (
-        <EmptyState
-          title="Architecture data unavailable"
-          body="No modules could be identified. Modules are derived from the repository's directory structure and dependency relationships."
-        />
-      ) : (
-        <div className="flex flex-1 gap-6">
-          {/* Left: Graph + details */}
-          <div className="flex min-w-0 flex-1 flex-col gap-6">
-            {/* Graph */}
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-6">
-                <LegendDot color="emerald" label="Healthy" />
-                <LegendDot color="amber" label="Evolving" />
-                <LegendDot color="rust" label="At risk" />
+      {/* Main Canvas Area + Slide-over Inspector */}
+      <div className="flex flex-1 gap-4 min-h-[560px] relative">
+        {/* Left: Interactive Graph Visualization Canvas */}
+        <div className="flex flex-1 min-w-0 flex-col">
+          <ArchitectureGraph
+            services={services}
+            dependencies={dependencies}
+            height={560}
+            selectedModuleId={selectedModule}
+            onSelectModule={(id) => {
+              setSelectedModule(id);
+              setSelectedEntity(id);
+            }}
+            searchQuery={searchQuery}
+            filterState={stateFilter}
+            isolateSelected={isolateMode}
+            onToggleIsolate={() => setIsolateMode((prev) => !prev)}
+            className="flex-1"
+          />
+        </div>
+
+        {/* Right: Docked / Slide-over Detail Inspector */}
+        {selectedDetail && (
+          <div className="w-80 lg:w-96 shrink-0 rounded-md border border-border bg-surface p-4 flex flex-col gap-4 shadow-xl overflow-y-auto max-h-[560px] animate-fade-in">
+            {/* Header with State & Close */}
+            <div className="flex items-start justify-between gap-2 border-b border-border pb-3">
+              <div className="flex flex-col min-w-0">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                      selectedDetail.state === "healthy"
+                        ? "bg-emerald"
+                        : selectedDetail.state === "evolving"
+                          ? "bg-amber"
+                          : "bg-rust"
+                    }`}
+                  />
+                  <h3 className="font-mono text-sm font-bold text-foreground truncate">
+                    {selectedDetail.name}
+                  </h3>
+                </div>
+                <span className="text-[11px] text-muted capitalize font-mono mt-0.5">
+                  Status: {selectedDetail.state}
+                </span>
               </div>
-              <div className="rounded-sm border border-border bg-surface p-2">
-                <ArchitectureGraph
-                  services={services}
-                  dependencies={dependencies}
-                  height={480}
-                />
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedModule(null);
+                  setSelectedEntity(null);
+                }}
+                className="cursor-pointer rounded-xs p-1 text-muted hover:bg-raised hover:text-foreground transition-colors"
+                aria-label="Close inspector panel"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Quick Action: Isolate Mode Toggle */}
+            <button
+              type="button"
+              onClick={() => setIsolateMode((prev) => !prev)}
+              className={`flex cursor-pointer items-center justify-center gap-2 rounded-xs border px-3 py-1.5 text-xs font-medium transition-colors ${
+                isolateMode
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-raised/50 text-secondary hover:bg-raised hover:text-foreground"
+              }`}
+            >
+              <Crosshair className="h-3.5 w-3.5" />
+              <span>{isolateMode ? "Show Full System Graph" : "Isolate Module & Connections"}</span>
+            </button>
+
+            {/* Core Metrics Grid */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-xs border border-border/80 bg-raised/30 p-2">
+                <span className="text-[10px] text-muted uppercase font-mono">Lines of Code</span>
+                <p className="font-mono text-sm font-semibold text-foreground mt-0.5">
+                  {selectedDetail.loc.toLocaleString()}
+                </p>
+              </div>
+              <div className="rounded-xs border border-border/80 bg-raised/30 p-2">
+                <span className="text-[10px] text-muted uppercase font-mono">Files in Module</span>
+                <p className="font-mono text-sm font-semibold text-foreground mt-0.5">
+                  {selectedDetail.fileCount}
+                </p>
+              </div>
+              <div className="rounded-xs border border-border/80 bg-raised/30 p-2">
+                <span className="text-[10px] text-muted uppercase font-mono">Fan-In (Dependents)</span>
+                <p className="font-mono text-sm font-semibold text-foreground mt-0.5">
+                  {selectedDetail.fanIn} inbound
+                </p>
+              </div>
+              <div className="rounded-xs border border-border/80 bg-raised/30 p-2">
+                <span className="text-[10px] text-muted uppercase font-mono">Fan-Out (Dependencies)</span>
+                <p className="font-mono text-sm font-semibold text-foreground mt-0.5">
+                  {selectedDetail.fanOut} outbound
+                </p>
               </div>
             </div>
 
-            {/* Module details section — show only when we have real data */}
-            {internalDependencies.length > 0 && (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                {highFanIn.length > 0 && (
-                  <div className="rounded-sm border border-border bg-surface px-4 py-3">
-                    <h3 className="mb-2 text-xs font-medium text-secondary">Most depended-upon modules</h3>
-                    <p className="mb-2 text-[11px] text-muted">High fan-in — changes affect many dependents</p>
-                    <div className="flex flex-col gap-1.5">
-                      {highFanIn.map((m) => (
-                        <button
-                          key={m.name}
-                          type="button"
-                          onClick={() => setSelectedModule(m.name === selectedModule ? null : m.name)}
-                          className={`flex cursor-pointer items-center justify-between rounded-sm px-1.5 py-1 text-left transition-colors hover:bg-raised ${
-                            selectedModule === m.name ? "bg-raised" : ""
-                          }`}
+            {/* Risk Factor Breakdown */}
+            {selectedRisk && (
+              <div className="flex flex-col gap-2 rounded-xs border border-border/80 bg-raised/30 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground">Risk Assessment</span>
+                  <span
+                    className={`font-mono text-xs font-bold ${
+                      selectedRisk.riskScore > 60
+                        ? "text-rust"
+                        : selectedRisk.riskScore > 35
+                          ? "text-amber"
+                          : "text-emerald"
+                    }`}
+                  >
+                    {selectedRisk.riskScore}/100
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-surface overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${
+                      selectedRisk.riskScore > 60
+                        ? "bg-rust"
+                        : selectedRisk.riskScore > 35
+                          ? "bg-amber"
+                          : "bg-emerald"
+                    }`}
+                    style={{ width: `${Math.min(100, selectedRisk.riskScore)}%` }}
+                  />
+                </div>
+                {selectedRisk.factors && (
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {selectedRisk.factors
+                      .filter((f) => f.contribution > 0)
+                      .slice(0, 4)
+                      .map((f, i) => (
+                        <span
+                          key={i}
+                          title={f.evidence.explanation}
+                          className="rounded-xs bg-surface border border-border px-1.5 py-0.5 text-[10px] font-mono text-muted"
                         >
-                          <span className="font-mono text-xs text-foreground">{m.name}</span>
-                          <span className="font-mono text-xs text-muted">{m.fanIn} inbound</span>
-                        </button>
+                          {f.name}: +{f.contribution}
+                        </span>
                       ))}
-                    </div>
-                  </div>
-                )}
-                {highFanOut.length > 0 && (
-                  <div className="rounded-sm border border-border bg-surface px-4 py-3">
-                    <h3 className="mb-2 text-xs font-medium text-secondary">Highest fan-out</h3>
-                    <p className="mb-2 text-[11px] text-muted">Modules with many outbound dependencies</p>
-                    <div className="flex flex-col gap-1.5">
-                      {highFanOut.map((m) => (
-                        <button
-                          key={m.name}
-                          type="button"
-                          onClick={() => setSelectedModule(m.name === selectedModule ? null : m.name)}
-                          className={`flex cursor-pointer items-center justify-between rounded-sm px-1.5 py-1 text-left transition-colors hover:bg-raised ${
-                            selectedModule === m.name ? "bg-raised" : ""
-                          }`}
-                        >
-                          <span className="font-mono text-xs text-foreground">{m.name}</span>
-                          <span className="font-mono text-xs text-muted">{m.fanOut} outbound</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {hubs.length > 0 && (
-                  <div className="rounded-sm border border-border bg-surface px-4 py-3">
-                    <h3 className="mb-2 text-xs font-medium text-secondary">Dependency hubs</h3>
-                    <p className="mb-2 text-[11px] text-muted">High fan-in AND fan-out — central modules</p>
-                    <div className="flex flex-col gap-1.5">
-                      {hubs.map((m) => (
-                        <button
-                          key={m.name}
-                          type="button"
-                          onClick={() => setSelectedModule(m.name === selectedModule ? null : m.name)}
-                          className={`flex cursor-pointer items-center justify-between rounded-sm px-1.5 py-1 text-left transition-colors hover:bg-raised ${
-                            selectedModule === m.name ? "bg-raised" : ""
-                          }`}
-                        >
-                          <span className="font-mono text-xs text-foreground">{m.name}</span>
-                          <span className="font-mono text-xs text-muted">{m.fanIn} in / {m.fanOut} out</span>
-                        </button>
-                      ))}
-                    </div>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Per-module detail */}
-            <div>
-              <h3 className="mb-3 text-sm font-medium text-secondary">Module details</h3>
-              <div className="flex flex-col gap-1">
-                {moduleStats.map((m) => (
-                  <button
-                    key={m.name}
-                    type="button"
-                    onClick={() => setSelectedModule(m.name === selectedModule ? null : m.name)}
-                    className={`cursor-pointer rounded-sm border px-3 py-2.5 text-left text-sm transition-colors hover:bg-surface ${
-                      selectedModule === m.name
-                        ? "border-foreground/30 bg-raised"
-                        : "border-border bg-surface"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className={`h-2 w-2 rounded-full ${
-                          m.state === "healthy" ? "bg-emerald" :
-                          m.state === "evolving" ? "bg-amber" : "bg-rust"
-                        }`} />
-                        <span className="font-mono text-xs font-medium text-foreground">{m.name}</span>
-                      </div>
-                      <div className="flex flex-wrap gap-3 text-xs text-muted">
-                        <span>{m.fileCount} file{m.fileCount !== 1 ? "s" : ""}</span>
-                        <span>{m.loc.toLocaleString()} LOC</span>
-                        {m.fanIn > 0 && <span>{m.fanIn} inbound</span>}
-                        {m.fanOut > 0 && <span>{m.fanOut} outbound</span>}
-                        {m.complexityEstimate > 0 && <span>Complexity: {m.complexityEstimate}</span>}
-                      </div>
-                    </div>
-                    {m.internalFromCount > 0 && (
-                      <p className="mt-1 text-[11px] text-muted">
-                        {m.internalFromCount} internal import relationship{m.internalFromCount !== 1 ? "s" : ""}
-                        {m.internalToCount > 0 ? ` · ${m.internalToCount} internal dependents` : ""}
-                      </p>
-                    )}
-                  </button>
+            {/* Inbound Dependents (Fan-In) */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <ArrowDownRight className="h-3.5 w-3.5 text-accent" />
+                Dependents ({selectedDepsTo.length})
+              </span>
+              {selectedDepsTo.length === 0 ? (
+                <span className="text-[11px] text-muted italic">No inbound module dependencies</span>
+              ) : (
+                <div className="flex flex-col gap-1 max-h-28 overflow-y-auto">
+                  {selectedDepsTo.map((d) => (
+                    <button
+                      key={d.from}
+                      type="button"
+                      onClick={() => setSelectedModule(d.from)}
+                      className="flex cursor-pointer items-center justify-between rounded-xs bg-raised/40 px-2.5 py-1 text-left text-xs font-mono text-secondary hover:bg-raised hover:text-foreground transition-colors"
+                    >
+                      <span className="truncate">← {d.from}</span>
+                      <ArrowRight className="h-3 w-3 text-muted shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Outbound Dependencies (Fan-Out) */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <ArrowUpRight className="h-3.5 w-3.5 text-accent" />
+                Dependencies ({selectedDepsFrom.length})
+              </span>
+              {selectedDepsFrom.length === 0 ? (
+                <span className="text-[11px] text-muted italic">No outbound module dependencies</span>
+              ) : (
+                <div className="flex flex-col gap-1 max-h-28 overflow-y-auto">
+                  {selectedDepsFrom.map((d) => (
+                    <button
+                      key={d.to}
+                      type="button"
+                      onClick={() => setSelectedModule(d.to)}
+                      className="flex cursor-pointer items-center justify-between rounded-xs bg-raised/40 px-2.5 py-1 text-left text-xs font-mono text-secondary hover:bg-raised hover:text-foreground transition-colors"
+                    >
+                      <span className="truncate">→ {d.to}</span>
+                      <ArrowRight className="h-3 w-3 text-muted shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Files in this Module */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <FileCode className="h-3.5 w-3.5 text-muted" />
+                Files ({selectedDetail.files.length})
+              </span>
+              <input
+                type="text"
+                placeholder="Search files..."
+                value={fileSearchQuery}
+                onChange={(e) => setFileSearchQuery(e.target.value)}
+                className="w-full rounded-xs border border-border bg-raised/40 px-2 py-1 text-[11px] text-foreground placeholder:text-muted focus:outline-hidden"
+              />
+              <div className="flex flex-col gap-1 max-h-36 overflow-y-auto text-[11px] font-mono text-muted">
+                {filteredFilesInModule.slice(0, 30).map((f) => (
+                  <span key={f} className="truncate p-1 rounded-xs hover:bg-raised/60 hover:text-foreground">
+                    {f}
+                  </span>
                 ))}
               </div>
             </div>
-
-            {/* No dep edges section — explain why */}
-            {totalInternalEdges === 0 && totalExternalLibs === 0 && services.length > 0 && (
-              <div className="rounded-sm border border-border bg-surface px-4 py-3">
-                <p className="text-xs text-muted">
-                  No dependency relationships could be established. The discovered modules ({services.length}) are shown above.
-                  Dependencies are derived from import/include statements in source files. If the repository uses unsupported
-                  languages or has no cross-module imports, no edges will appear.
-                </p>
-              </div>
-            )}
           </div>
+        )}
+      </div>
 
-          {/* Right: Selected module detail panel */}
-          {selectedDetail && (
-            <div className="w-72 shrink-0 rounded-sm border border-border bg-surface p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`h-2.5 w-2.5 rounded-full ${
-                    selectedDetail.state === "healthy" ? "bg-emerald" :
-                    selectedDetail.state === "evolving" ? "bg-amber" : "bg-rust"
-                  }`} />
-                  <h3 className="font-mono text-xs font-medium text-foreground">{selectedDetail.name}</h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedModule(null)}
-                  className="cursor-pointer text-xs text-muted hover:text-secondary"
-                  aria-label="Close detail panel"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <DetailRow label="Files" value={`${selectedDetail.fileCount}`} />
-                <DetailRow label="Lines of code" value={`${selectedDetail.loc.toLocaleString()}`} />
-                <DetailRow
-                  label="Structural complexity estimate"
-                  value={selectedDetail.complexityEstimate > 0
-                    ? `${selectedDetail.complexityEstimate} (across ${selectedDetail.complexityFiles} file(s))`
-                    : "Unavailable"
-                  }
-                />
-                <DetailRow
-                  label="Fan-in (dependents)"
-                  value={selectedDetail.fanIn > 0 ? `${selectedDetail.fanIn}` : "0"}
-                />
-                <DetailRow
-                  label="Fan-out (dependencies)"
-                  value={selectedDetail.fanOut > 0 ? `${selectedDetail.fanOut}` : "0"}
-                />
-
-                {/* Risk score from real metrics */}
-                {selectedRisk && (
-                  <>
-                    <div className="my-1 border-t border-border" />
-                    <DetailRow label="Risk score (heuristic)" value={`${selectedRisk.riskScore}/100`} />
-                    <DetailRow
-                      label="Churn (commit count)"
-                      value={`${selectedRisk.churn}`}
-                    />
-                    <DetailRow
-                      label="Contributors"
-                      value={selectedRisk.contributorCount > 0
-                        ? `${selectedRisk.contributorCount}`
-                        : "Unavailable"
-                      }
-                    />
-                    {selectedRisk.reasons.length > 0 && (
-                      <div className="mt-1">
-                        <span className="text-[11px] text-secondary">Evidence:</span>
-                        <ul className="mt-1 flex flex-col gap-1">
-                          {selectedRisk.reasons.slice(0, 4).map((r, i) => (
-                            <li key={i} className="flex items-start gap-1.5 text-[11px] text-muted">
-                              <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-muted" />
-                              {r}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Factor breakdown */}
-                {selectedRisk && selectedRisk.factors.filter((f) => f.contribution > 0).length > 0 && (
-                  <div className="mt-1">
-                    <div className="my-1 border-t border-border" />
-                    <span className="text-[11px] text-secondary">Risk factors (heuristic weights):</span>
-                    <div className="mt-1 flex flex-wrap gap-1.5">
-                      {selectedRisk.factors
-                        .filter((f) => f.contribution > 0)
-                        .slice(0, 5)
-                        .map((f, i) => (
-                          <span
-                            key={i}
-                            title={f.evidence.explanation}
-                            className="rounded-sm bg-raised px-1.5 py-0.5 text-[10px] text-muted"
-                          >
-                            {f.name}: +{f.contribution}
-                          </span>
-                        ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Files in this module */}
-                {selectedDetail.files.length > 0 && (
-                  <div className="mt-1">
-                    <div className="my-1 border-t border-border" />
-                    <span className="text-[11px] text-secondary">Files ({selectedDetail.files.length}):</span>
-                    <div className="mt-1 flex max-h-40 flex-col gap-0.5 overflow-y-auto">
-                      {selectedDetail.files.map((f) => (
-                        <span key={f} className="font-mono text-[10px] text-muted">
-                          {f}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Dependencies from this module */}
-                {selectedDepsFrom.length > 0 && (
-                  <div className="mt-1">
-                    <div className="my-1 border-t border-border" />
-                    <span className="text-[11px] text-secondary">Dependencies:</span>
-                    <div className="mt-1 flex flex-col gap-0.5">
-                      {selectedDepsFrom.map((d) => (
-                        <span key={d.to} className="font-mono text-[10px] text-muted">
-                          → {d.to}
-                          {d.reason && <span className="ml-1 text-muted/70">({d.reason})</span>}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Dependents */}
-                {selectedDepsTo.length > 0 && (
-                  <div className="mt-1">
-                    <div className="my-1 border-t border-border" />
-                    <span className="text-[11px] text-secondary">Depended on by:</span>
-                    <div className="mt-1 flex flex-col gap-0.5">
-                      {selectedDepsTo.map((d) => (
-                        <span key={d.from} className="font-mono text-[10px] text-muted">
-                          ← {d.from}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+      {/* Bottom Summary Bar */}
+      <div className="rounded-md border border-border bg-surface px-4 py-2.5 text-xs text-muted flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-foreground">{services.length} Total Modules</span>
+          <span>·</span>
+          <span>{totalDeps} inter-module dependency edges</span>
+          <span>·</span>
+          <span>{totalInternalEdges} file-level import relationships</span>
         </div>
-      )}
+        <div className="flex items-center gap-2 font-mono text-[11px]">
+          <ShieldCheck className="h-3.5 w-3.5 text-emerald" />
+          <span>Factual Import AST Extraction</span>
+        </div>
+      </div>
     </div>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-2">
-      <span className="text-[11px] text-secondary shrink-0">{label}</span>
-      <span className="text-right font-mono text-[11px] text-foreground">{value}</span>
-    </div>
-  );
-}
-
-const DOT_STYLES: Record<"emerald" | "amber" | "rust", string> = {
-  emerald: "bg-emerald",
-  amber: "bg-amber",
-  rust: "bg-rust",
-};
-
-function LegendDot({
-  color,
-  label,
-}: {
-  color: "emerald" | "amber" | "rust";
-  label: string;
-}) {
-  return (
-    <span className="flex items-center gap-2 text-xs text-secondary">
-      <span className={`h-2 w-2 rounded-full ${DOT_STYLES[color]}`} />
-      {label}
-    </span>
   );
 }

@@ -1,4 +1,4 @@
-/* Vertex design system — dark-first, semantic tokens. See design-system/MASTER.md.
+/* Vertex design system — dark-first, semantic tokens.
    NOTE: @fontsource imports MUST stay before `@import "tailwindcss"` (Tailwind
    inlines its own import; any @import after it breaks the build). */
 
@@ -19,31 +19,58 @@
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
 
   /* Neutral ramp — dark values (default). Light overrides below. */
-  --color-background: oklch(0.135 0.012 264);
-  --color-surface: oklch(0.17 0.014 264);
-  --color-raised: oklch(0.215 0.016 264);
-  --color-border: oklch(0.27 0.016 264);
-  --color-foreground: oklch(0.93 0.01 264);
-  --color-secondary: oklch(0.68 0.015 264);
-  --color-muted: oklch(0.5 0.015 264);
+  --color-background: oklch(0.115 0.012 260);
+  --color-surface: oklch(0.145 0.014 260);
+  --color-raised: oklch(0.185 0.016 260);
+  --color-overlay: oklch(0.22 0.018 260);
+  --color-border: oklch(0.25 0.015 260);
+  --color-subtle-border: oklch(0.18 0.012 260);
+  --color-foreground: oklch(0.95 0.008 260);
+  --color-secondary: oklch(0.72 0.015 260);
+  --color-muted: oklch(0.52 0.015 260);
 
-  /* Semantic accents — ONLY for state, never decoration */
-  --color-emerald: oklch(0.62 0.095 160);
-  --color-amber: oklch(0.72 0.11 85);
-  --color-rust: oklch(0.56 0.1 30);
+  /* Primary Signature Accent: Electric Indigo / Violet */
+  --color-accent: oklch(0.62 0.22 272);
+  --color-accent-hover: oklch(0.68 0.22 272);
+  --color-accent-muted: oklch(0.62 0.22 272 / 0.14);
+  --color-accent-subtle: oklch(0.62 0.22 272 / 0.07);
 
-  /* Radii — small to moderate, no giant rounded cards */
-  --radius-sm: 4px;
-  --radius-md: 8px;
+  /* Semantic status accents — strictly for data & state */
+  --color-emerald: oklch(0.68 0.16 155);
+  --color-emerald-muted: oklch(0.68 0.16 155 / 0.14);
+  --color-amber: oklch(0.75 0.15 75);
+  --color-amber-muted: oklch(0.75 0.15 75 / 0.14);
+  --color-rust: oklch(0.62 0.18 25);
+  --color-rust-muted: oklch(0.62 0.18 25 / 0.14);
+  --color-cyan: oklch(0.72 0.14 210);
+  --color-cyan-muted: oklch(0.72 0.14 210 / 0.14);
+
+  /* Radii — compact & refined (Linear / Raycast style) */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
 
   /* Motion */
   --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
-  --animate-fade-in: fade-in 250ms var(--ease-out-soft) both;
+  --animate-fade-in: fade-in 180ms var(--ease-out-soft) both;
+  --animate-slide-up: slide-up 220ms var(--ease-out-soft) both;
 
   @keyframes fade-in {
     from {
       opacity: 0;
-      transform: translateY(4px);
+      transform: translateY(3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
     }
     to {
       opacity: 1;
@@ -52,19 +79,27 @@
   }
 }
 
-/* Light theme — same semantic roles, inverted neutral ramp, slightly desaturated accents.
-   html[data-theme="light"] outranks :root so utilities (var-based) swap instantly. */
+/* Light theme overrides */
 html[data-theme="light"] {
-  --color-background: oklch(0.975 0.004 264);
-  --color-surface: oklch(0.945 0.006 264);
-  --color-raised: oklch(0.915 0.008 264);
-  --color-border: oklch(0.84 0.012 264);
-  --color-foreground: oklch(0.16 0.012 264);
-  --color-secondary: oklch(0.42 0.012 264);
-  --color-muted: oklch(0.55 0.012 264);
-  --color-emerald: oklch(0.48 0.095 160);
-  --color-amber: oklch(0.55 0.11 85);
-  --color-rust: oklch(0.42 0.1 30);
+  --color-background: oklch(0.985 0.003 260);
+  --color-surface: oklch(0.955 0.006 260);
+  --color-raised: oklch(0.92 0.008 260);
+  --color-overlay: oklch(0.88 0.01 260);
+  --color-border: oklch(0.85 0.012 260);
+  --color-subtle-border: oklch(0.91 0.008 260);
+  --color-foreground: oklch(0.14 0.012 260);
+  --color-secondary: oklch(0.40 0.012 260);
+  --color-muted: oklch(0.55 0.012 260);
+
+  --color-accent: oklch(0.52 0.22 272);
+  --color-accent-hover: oklch(0.46 0.22 272);
+  --color-accent-muted: oklch(0.52 0.22 272 / 0.12);
+  --color-accent-subtle: oklch(0.52 0.22 272 / 0.06);
+
+  --color-emerald: oklch(0.52 0.16 155);
+  --color-amber: oklch(0.60 0.15 75);
+  --color-rust: oklch(0.50 0.18 25);
+  --color-cyan: oklch(0.56 0.14 210);
 }
 
 html {
@@ -81,53 +116,57 @@ body {
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
-  font-size: 1rem;
+  font-size: 0.875rem;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  transition:
-    background-color 200ms var(--ease-out-soft),
-    color 200ms var(--ease-out-soft);
 }
 
 ::selection {
-  background-color: color-mix(in oklab, var(--color-emerald) 22%, transparent);
+  background-color: var(--color-accent-muted);
   color: var(--color-foreground);
 }
 
-/* Visible focus ring for keyboard users — never remove outlines without a replacement */
+/* Subtle focus ring */
 :focus-visible {
-  outline: 2px solid var(--color-secondary);
-  outline-offset: 2px;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
   border-radius: var(--radius-sm);
 }
 
-/* Scrollbars follow color-scheme; keep them quiet */
+/* Polished scrollbars */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-border) transparent;
 }
 
-/* Hero-only atmosphere: faint neutral radial + 1px dot grid. No accent color —
-   accents communicate state, never decoration. */
-.hero-texture {
-  background-image:
-    radial-gradient(
-      52% 42% at 50% 0%,
-      color-mix(in oklab, var(--color-foreground) 9%, transparent),
-      transparent
-    ),
-    radial-gradient(
-      color-mix(in oklab, var(--color-foreground) 5%, transparent) 1px,
-      transparent 1px
-    );
-  background-size:
-    100% 100%,
-    26px 26px;
-  background-position: center, center;
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-/* Respect prefers-reduced-motion: kill transitions/animations everywhere */
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
+
+/* Subtle grid backdrop */
+.grid-backdrop {
+  background-image: 
+    linear-gradient(to right, color-mix(in oklab, var(--color-border) 35%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--color-border) 35%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Respect prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

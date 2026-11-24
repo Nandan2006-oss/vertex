@@ -2,13 +2,12 @@ import { useState, useMemo } from "react";
 import {
   Search,
   ArrowLeftRight,
-  ExternalLink,
   FileCode,
   Network,
   List,
+  Package,
 } from "lucide-react";
-import { useAnalysis } from "../../analysis/AnalysisContext";
-import { EmptyState } from "../EmptyState";
+import { useAnalysis, useWorkspaceNav } from "../../analysis/AnalysisContext";
 import { FileDependencyGraph } from "../../components/FileDependencyGraph";
 import { ExternalDependencyGraph } from "../../components/ExternalDependencyGraph";
 import { CircularDependencyGraph } from "../../components/CircularDependencyGraph";
@@ -18,66 +17,106 @@ type ViewMode = "graph" | "list";
 
 export function DependenciesScreen() {
   const analysis = useAnalysis();
+  const { navigateToScreen } = useWorkspaceNav();
   const {
     internalDependencies,
     externalDependencies,
     circularDependencies,
   } = analysis;
+
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<Tab>("internal");
+  const [tab, setTab] = useState<Tab>(circularDependencies.length > 0 ? "circular" : "internal");
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [sortKey, setSortKey] = useState<"from" | "to">("from");
 
   const filteredInternal = useMemo(() => {
-    if (!query.trim()) return internalDependencies;
-    const q = query.toLowerCase();
-    return internalDependencies.filter(
-      (d) => d.from.toLowerCase().includes(q) || d.to.toLowerCase().includes(q),
-    );
-  }, [query, internalDependencies]);
+    let list = [...internalDependencies];
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      list = list.filter(
+        (d) =>
+          d.from.toLowerCase().includes(q) ||
+          d.to.toLowerCase().includes(q) ||
+          d.evidence.toLowerCase().includes(q),
+      );
+    }
+    return list.sort((a, b) => a[sortKey].localeCompare(b[sortKey]));
+  }, [query, internalDependencies, sortKey]);
 
   const filteredExternal = useMemo(() => {
     if (!query.trim()) return externalDependencies;
     const q = query.toLowerCase();
-    return externalDependencies.filter((d) => d.name.toLowerCase().includes(q));
+    return externalDependencies.filter(
+      (d) =>
+        d.name.toLowerCase().includes(q) ||
+        d.imports.some((f) => f.toLowerCase().includes(q)),
+    );
   }, [query, externalDependencies]);
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Tabs + View Mode Toggle + Search */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-1 flex-col gap-4 min-w-0">
+      {/* Top Workspace Controls Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface p-2.5 shadow-2xs">
         {/* Category Tabs */}
-        <div className="flex gap-1 rounded-sm border border-border bg-surface p-0.5">
-          {(["internal", "external", "circular"] as Tab[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTab(t)}
-              className={`cursor-pointer rounded-sm px-3 py-1.5 text-xs font-medium transition-colors ${
-                tab === t
-                  ? "bg-raised text-foreground font-semibold shadow-xs"
-                  : "text-muted hover:text-secondary"
+        <div className="flex items-center gap-1 rounded-xs border border-border bg-raised/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => setTab("internal")}
+            className={`cursor-pointer rounded-xs px-3 py-1.5 text-xs font-medium transition-all ${
+              tab === "internal"
+                ? "bg-surface text-foreground font-semibold shadow-2xs"
+                : "text-muted hover:text-secondary"
+            }`}
+          >
+            Internal Imports ({internalDependencies.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("external")}
+            className={`cursor-pointer rounded-xs px-3 py-1.5 text-xs font-medium transition-all ${
+              tab === "external"
+                ? "bg-surface text-foreground font-semibold shadow-2xs"
+                : "text-muted hover:text-secondary"
+            }`}
+          >
+            External Packages ({externalDependencies.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("circular")}
+            className={`flex items-center gap-1.5 cursor-pointer rounded-xs px-3 py-1.5 text-xs font-medium transition-all ${
+              tab === "circular"
+                ? "bg-surface text-foreground font-semibold shadow-2xs"
+                : "text-muted hover:text-secondary"
+            }`}
+          >
+            {circularDependencies.length > 0 && (
+              <span className="flex h-2 w-2 rounded-full bg-rust animate-pulse" />
+            )}
+            <span>Circular Cycles</span>
+            <span
+              className={`rounded-xs font-mono text-[10px] px-1 py-0.2 ${
+                circularDependencies.length > 0
+                  ? "bg-rust/20 text-rust font-bold"
+                  : "bg-raised text-muted"
               }`}
             >
-              {t === "internal"
-                ? `Internal (${internalDependencies.length})`
-                : t === "external"
-                  ? `External (${externalDependencies.length})`
-                  : `Circular (${circularDependencies.length})`}
-            </button>
-          ))}
+              {circularDependencies.length}
+            </span>
+          </button>
         </div>
 
         {/* View Switcher & Search Bar */}
-        <div className="flex items-center gap-3 ml-auto">
+        <div className="flex items-center gap-2.5 ml-auto">
           {/* Graph vs List View Toggle */}
-          <div className="flex items-center gap-1 rounded-sm border border-border bg-surface p-0.5">
+          <div className="flex items-center gap-0.5 rounded-xs border border-border bg-raised/40 p-0.5">
             <button
               type="button"
               onClick={() => setViewMode("graph")}
               title="Interactive Visual Graph View"
-              className={`flex cursor-pointer items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xs px-2.5 py-1 text-xs font-medium transition-all ${
                 viewMode === "graph"
-                  ? "bg-raised text-foreground font-semibold shadow-xs"
+                  ? "bg-surface text-foreground font-semibold shadow-2xs"
                   : "text-muted hover:text-secondary"
               }`}
             >
@@ -87,15 +126,15 @@ export function DependenciesScreen() {
             <button
               type="button"
               onClick={() => setViewMode("list")}
-              title="Detailed List View"
-              className={`flex cursor-pointer items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
+              title="Structured Data Table View"
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xs px-2.5 py-1 text-xs font-medium transition-all ${
                 viewMode === "list"
-                  ? "bg-raised text-foreground font-semibold shadow-xs"
+                  ? "bg-surface text-foreground font-semibold shadow-2xs"
                   : "text-muted hover:text-secondary"
               }`}
             >
               <List className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>List</span>
+              <span>Table</span>
             </button>
           </div>
 
@@ -107,254 +146,143 @@ export function DependenciesScreen() {
             />
             <input
               type="text"
-              placeholder="Search dependencies…"
+              placeholder="Search dependencies or AST lines…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="w-full rounded-sm border border-border bg-surface py-1.5 pl-8 pr-3 text-xs sm:text-sm text-foreground placeholder:text-muted focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-0 transition-colors"
+              className="w-full rounded-xs border border-border bg-raised/50 py-1.5 pl-8 pr-3 text-xs text-foreground placeholder:text-muted focus:border-accent/50 focus:outline-hidden transition-colors"
             />
           </div>
         </div>
       </div>
 
-      {/* Tab content */}
+      {/* Tab Content Panes */}
       {tab === "internal" && (
-        <InternalTab
-          deps={filteredInternal}
-          allDeps={internalDependencies}
-          total={internalDependencies.length}
-          query={query}
-          viewMode={viewMode}
-          onSwitchView={setViewMode}
-        />
-      )}
-      {tab === "external" && (
-        <ExternalTab
-          deps={filteredExternal}
-          total={externalDependencies.length}
-          query={query}
-          viewMode={viewMode}
-        />
-      )}
-      {tab === "circular" && (
-        <CircularTab
-          deps={circularDependencies}
-          viewMode={viewMode}
-        />
-      )}
-    </div>
-  );
-}
-
-function InternalTab({
-  deps,
-  allDeps,
-  total,
-  query,
-  viewMode,
-  onSwitchView,
-}: {
-  deps: { from: string; to: string; evidence: string }[];
-  allDeps: { from: string; to: string; evidence: string }[];
-  total: number;
-  query: string;
-  viewMode: ViewMode;
-  onSwitchView: (v: ViewMode) => void;
-}) {
-  if (total === 0) {
-    return (
-      <EmptyState
-        title="No internal dependencies detected"
-        body="Internal dependencies are derived from actual import/include statements in source files. Repositories without supported source languages may show no results."
-      />
-    );
-  }
-
-  const filtered = deps;
-
-  if (filtered.length === 0) {
-    return (
-      <EmptyState
-        title="No matching dependencies"
-        body={`No dependencies match "${query}". Try a different file or component name.`}
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      {/* Subheader info */}
-      <div className="flex items-center justify-between text-xs text-muted">
-        <p>
-          Showing {filtered.length} of {total} internal dependency relationships
-          {query && <span className="text-secondary ml-1">matching &quot;{query}&quot;</span>}
-        </p>
-        <span className="hidden sm:inline-block">
-          {viewMode === "graph"
-            ? "Drag nodes to rearrange · Hover edges for import evidence · Click node to inspect"
-            : "Switch to Graph view for interactive node-link visualization"}
-        </span>
-      </div>
-
-      {/* Visual Graphical Mode */}
-      {viewMode === "graph" ? (
-        <FileDependencyGraph
-          dependencies={filtered}
-          searchQuery={query}
-          height={600}
-        />
-      ) : (
-        /* Detailed List Mode */
-        <div className="flex flex-col gap-1.5">
-          {filtered.slice(0, 100).map((dep, i) => (
-            <div
-              key={`int-${i}`}
-              className="group flex items-start gap-3 rounded-sm border border-border bg-surface px-3 py-2.5 text-sm transition-colors hover:border-foreground/20 hover:bg-raised/40"
-            >
-              <FileCode className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted group-hover:text-foreground transition-colors" aria-hidden="true" />
-              <div className="flex flex-1 flex-col gap-0.5 min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs font-medium text-foreground truncate max-w-full">
-                    {dep.from}
-                  </span>
-                  <ArrowLeftRight className="h-3 w-3 text-muted shrink-0" aria-hidden="true" />
-                  <span className="font-mono text-xs font-medium text-secondary truncate max-w-full">
-                    {dep.to}
-                  </span>
-                </div>
-                <span className="font-mono text-[11px] text-muted/80 break-all bg-raised/40 px-1.5 py-0.5 rounded-sm mt-0.5">
-                  Evidence: {dep.evidence}
-                </span>
-              </div>
+        <div className="flex flex-1 flex-col gap-3 min-h-[560px]">
+          {viewMode === "graph" ? (
+            <div className="flex-1 min-h-[560px]">
+              <FileDependencyGraph
+                dependencies={filteredInternal}
+                searchQuery={query}
+                height={580}
+              />
             </div>
-          ))}
-          {filtered.length > 100 && (
-            <p className="text-xs text-muted text-center py-2">
-              Showing 100 of {filtered.length} results.
-            </p>
+          ) : (
+            <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-4 shadow-2xs">
+              <div className="flex items-center justify-between text-xs text-muted mb-2">
+                <span>
+                  Showing {filteredInternal.length} of {internalDependencies.length} internal import relationships
+                </span>
+                <div className="flex items-center gap-2">
+                  <span>Sort by:</span>
+                  <button
+                    type="button"
+                    onClick={() => setSortKey("from")}
+                    className={`cursor-pointer rounded-xs px-2 py-0.5 font-mono text-[11px] ${
+                      sortKey === "from" ? "bg-accent/20 text-accent font-bold" : "hover:text-foreground"
+                    }`}
+                  >
+                    Consumer (From)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortKey("to")}
+                    className={`cursor-pointer rounded-xs px-2 py-0.5 font-mono text-[11px] ${
+                      sortKey === "to" ? "bg-accent/20 text-accent font-bold" : "hover:text-foreground"
+                    }`}
+                  >
+                    Target (To)
+                  </button>
+                </div>
+              </div>
+
+              {filteredInternal.length === 0 ? (
+                <p className="text-xs text-muted py-6 text-center">No dependencies match &ldquo;{query}&rdquo;.</p>
+              ) : (
+                <div className="flex flex-col gap-1.5 max-h-[520px] overflow-y-auto">
+                  {filteredInternal.slice(0, 150).map((dep, i) => (
+                    <div
+                      key={`int-${i}`}
+                      className="group flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-xs border border-border/80 bg-raised/30 p-2.5 text-xs transition-colors hover:border-accent/40 hover:bg-raised"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        <FileCode className="h-3.5 w-3.5 text-muted shrink-0 group-hover:text-accent" />
+                        <span className="font-mono text-foreground font-medium truncate max-w-[280px]">
+                          {dep.from}
+                        </span>
+                        <ArrowLeftRight className="h-3 w-3 text-muted shrink-0" />
+                        <span className="font-mono text-secondary font-medium truncate max-w-[280px]">
+                          {dep.to}
+                        </span>
+                      </div>
+                      <div className="font-mono text-[10px] text-muted/90 bg-surface px-2 py-1 rounded-xs border border-border/60 max-w-sm truncate">
+                        {dep.evidence}
+                      </div>
+                    </div>
+                  ))}
+                  {filteredInternal.length > 150 && (
+                    <p className="text-center font-mono text-xs text-muted py-2">
+                      Showing first 150 of {filteredInternal.length} records. Refine search query for specific files.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
-    </div>
-  );
-}
 
-function ExternalTab({
-  deps,
-  total,
-  query,
-  viewMode,
-}: {
-  deps: { name: string; imports: string[] }[];
-  total: number;
-  query: string;
-  viewMode: ViewMode;
-}) {
-  if (total === 0) {
-    return (
-      <EmptyState
-        title="No external dependencies detected"
-        body="External dependencies are derived from import/include statements that reference libraries rather than internal files."
-      />
-    );
-  }
-
-  if (deps.length === 0) {
-    return (
-      <EmptyState
-        title="No matching dependencies"
-        body={`No external libraries match "${query}".`}
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted">
-        {total} external libraries detected across the project
-      </p>
-
-      {viewMode === "graph" ? (
-        <ExternalDependencyGraph
-          dependencies={deps}
-          searchQuery={query}
-          height={580}
-        />
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          {deps.map((dep) => (
-            <div
-              key={dep.name}
-              className="flex items-start gap-3 rounded-sm border border-border bg-surface px-3 py-2.5 text-sm"
-            >
-              <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
-              <div className="flex flex-1 flex-col gap-0.5">
-                <span className="font-mono text-xs font-medium text-foreground">{dep.name}</span>
-                <span className="text-xs text-secondary">
-                  Imported by {dep.imports.length} file(s)
-                </span>
-                {dep.imports.length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {dep.imports.slice(0, 10).map((f) => (
-                      <span
-                        key={f}
-                        className="rounded-sm bg-raised px-1.5 py-0.5 font-mono text-[10px] text-muted"
-                      >
-                        {f.split("/").pop()}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
+      {tab === "external" && (
+        <div className="flex flex-1 flex-col gap-3 min-h-[560px]">
+          {viewMode === "graph" ? (
+            <div className="flex-1 min-h-[560px]">
+              <ExternalDependencyGraph
+                dependencies={filteredExternal}
+                searchQuery={query}
+                height={580}
+              />
             </div>
-          ))}
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {filteredExternal.map((pkg) => (
+                <div
+                  key={pkg.name}
+                  className="rounded-md border border-border bg-surface p-3.5 shadow-2xs flex flex-col gap-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Package className="h-4 w-4 text-accent shrink-0" />
+                      <span className="font-mono text-xs font-bold text-foreground truncate">
+                        {pkg.name}
+                      </span>
+                    </div>
+                    <span className="rounded-xs bg-raised px-1.5 py-0.5 font-mono text-[10px] text-muted shrink-0">
+                      {pkg.imports.length} file{pkg.imports.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+
+                  {pkg.imports.length > 0 && (
+                    <div className="flex flex-col gap-1 max-h-28 overflow-y-auto pt-1">
+                      <span className="text-[10px] text-muted uppercase font-mono">Imported by:</span>
+                      {pkg.imports.slice(0, 15).map((f) => (
+                        <span key={f} className="font-mono text-[10px] text-secondary truncate">
+                          • {f}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
-    </div>
-  );
-}
 
-function CircularTab({
-  deps,
-  viewMode,
-}: {
-  deps: { cycle: string[] }[];
-  viewMode: ViewMode;
-}) {
-  if (deps.length === 0) {
-    return (
-      <EmptyState
-        title="No circular dependencies detected"
-        body="Circular dependencies occur when file A imports B and B imports A (directly or transitively). No cycles were found in the analyzed files."
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      {viewMode === "graph" ? (
-        <CircularDependencyGraph cycles={deps} />
-      ) : (
-        /* Cycle Cards List */
-        <div className="flex flex-col gap-1.5">
-          <p className="text-xs text-muted">
-            {deps.length} circular dependenc{deps.length === 1 ? "y" : "ies"} detected
-          </p>
-          {deps.map((dep, i) => (
-            <div
-              key={i}
-              className="rounded-sm border border-border bg-surface px-3 py-2.5 text-sm"
-            >
-              <span className="text-xs font-medium text-rust">Cycle {i + 1}</span>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-foreground">
-                {dep.cycle.map((node, ni) => (
-                  <span key={ni} className="flex items-center gap-1">
-                    {ni > 0 && <ArrowLeftRight className="h-3 w-3 text-rust/60" aria-hidden="true" />}
-                    <span className="font-mono">{node.split("/").pop()}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
+      {tab === "circular" && (
+        <div className="flex flex-1 flex-col gap-4">
+          <CircularDependencyGraph
+            cycles={circularDependencies}
+            onSelectFile={(f) => navigateToScreen("architecture", f)}
+          />
         </div>
       )}
     </div>

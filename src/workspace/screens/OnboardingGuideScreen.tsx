@@ -1,209 +1,287 @@
-import { useAnalysis } from "../../analysis/AnalysisContext";
+import { useState } from "react";
+import {
+  Compass,
+  ArrowRight,
+  FileCode,
+  Layers,
+  AlertTriangle,
+  Users,
+  ExternalLink,
+  BookOpen,
+} from "lucide-react";
+import { useAnalysis, useWorkspaceNav } from "../../analysis/AnalysisContext";
 import { EmptyState } from "../EmptyState";
 
 export function OnboardingGuideScreen() {
   const analysis = useAnalysis();
+  const { navigateToScreen } = useWorkspaceNav();
   const guide = analysis.onboardingGuide;
+
+  const [activeStep, setActiveStep] = useState<number>(1);
 
   if (!guide) {
     return (
       <EmptyState
-        title="Guide not available"
-        body="The onboarding guide is generated from repository analysis. Try a GitHub repository with source files."
+        title="Onboarding Guide unavailable"
+        body="The guided codebase exploration is generated from repository entry points and dependency flow. Repositories without recognized entry points may not generate a guide."
       />
     );
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      <div>
-        <h1 className="font-display text-xl font-bold tracking-tight text-foreground">
-          New Developer Guide
-        </h1>
-        <p className="mt-1 text-sm text-secondary">
-          A recommended exploration path for{" "}
-          <span className="font-mono">{analysis.name}</span>
-        </p>
+    <div className="flex flex-1 flex-col gap-6 min-w-0">
+      {/* Header Banner */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-md border border-border bg-surface p-4 shadow-2xs">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-muted text-accent border border-accent/20">
+            <Compass className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="font-display text-base font-semibold text-foreground tracking-tight">
+              Developer Onboarding Roadmap
+            </h1>
+            <p className="text-xs text-muted">
+              Evidence-based codebase mental model for new engineers joining{" "}
+              <span className="font-mono text-foreground font-semibold">{analysis.name}</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="rounded-xs border border-border bg-raised px-2 py-1 font-mono text-[11px] text-secondary">
+            {guide.projectType}
+          </span>
+          <span className="rounded-xs border border-border bg-raised px-2 py-1 font-mono text-[11px] text-muted">
+            {guide.recommendedPath.length} Milestones
+          </span>
+        </div>
       </div>
 
-      {/* Project info */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <InfoCard label="Project type" value={guide.projectType} />
-        <InfoCard
-          label="Entry points"
-          value={guide.entryPoints.length > 0 ? String(guide.entryPoints.length) : "Not detected"}
-        />
-        <InfoCard
-          label="Major modules"
-          value={String(guide.majorModules.length)}
-        />
-        <InfoCard
-          label="Risky modules"
-          value={String(guide.riskyModules.length)}
-          state={guide.riskyModules.length > 0 ? "warn" : "ok"}
-        />
-      </div>
-
-      {/* Entry points */}
-      {guide.entryPoints.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-sm font-medium text-secondary">
-            1. Entry Points
-          </h2>
-          <p className="mb-3 text-xs text-muted">
-            These files are where the application starts. Begin your exploration here.
+      {/* 4 Telemetry Status Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="rounded-md border border-border bg-surface p-3.5 shadow-2xs">
+          <span className="text-[11px] font-medium text-secondary">Identified Entry Points</span>
+          <p className="font-mono text-2xl font-bold text-foreground mt-1">
+            {guide.entryPoints.length}
           </p>
-          <div className="flex flex-col gap-1">
-            {guide.entryPoints.map((ep, i) => (
+          <span className="text-[10px] text-muted font-mono">App bootstrap files</span>
+        </div>
+
+        <div className="rounded-md border border-border bg-surface p-3.5 shadow-2xs">
+          <span className="text-[11px] font-medium text-secondary">Core Architecture Pillars</span>
+          <p className="font-mono text-2xl font-bold text-foreground mt-1">
+            {guide.majorModules.length}
+          </p>
+          <span className="text-[10px] text-muted font-mono">Primary domain modules</span>
+        </div>
+
+        <div className="rounded-md border border-border bg-surface p-3.5 shadow-2xs">
+          <span className="text-[11px] font-medium text-secondary">Exploration Steps</span>
+          <p className="font-mono text-2xl font-bold text-accent mt-1">
+            {guide.recommendedPath.length}
+          </p>
+          <span className="text-[10px] text-muted font-mono">Sequential reading order</span>
+        </div>
+
+        <div className="rounded-md border border-border bg-surface p-3.5 shadow-2xs">
+          <span className="text-[11px] font-medium text-secondary">High-Caution Modules</span>
+          <p
+            className={`font-mono text-2xl font-bold mt-1 ${
+              guide.riskyModules.length > 0 ? "text-rust" : "text-emerald"
+            }`}
+          >
+            {guide.riskyModules.length}
+          </p>
+          <span className="text-[10px] text-muted font-mono">Require extra test coverage</span>
+        </div>
+      </div>
+
+      {/* Recommended Exploration Sequence (Roadmap) */}
+      <div className="rounded-md border border-border bg-surface p-5 shadow-2xs flex flex-col gap-4">
+        <div className="flex items-center justify-between border-b border-border pb-3">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-accent" />
+            <h2 className="text-xs font-semibold text-foreground tracking-wide uppercase">
+              1. Recommended Sequential Exploration Path
+            </h2>
+          </div>
+          <span className="text-[11px] text-muted font-mono">
+            Low-risk foundations first, complex areas last
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-2.5">
+          {guide.recommendedPath.map((step) => {
+            const isCurrent = activeStep === step.step;
+            return (
+              <div
+                key={step.file}
+                onClick={() => setActiveStep(step.step)}
+                className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-sm border p-3.5 transition-all cursor-pointer ${
+                  isCurrent
+                    ? "border-accent bg-accent/10 shadow-2xs"
+                    : "border-border/80 bg-raised/30 hover:border-accent/30 hover:bg-raised/60"
+                }`}
+              >
+                <div className="flex items-start gap-3 min-w-0 flex-1">
+                  <div
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xs font-mono text-xs font-bold ${
+                      isCurrent
+                        ? "bg-accent text-white shadow-2xs"
+                        : "bg-surface border border-border text-muted"
+                    }`}
+                  >
+                    {step.step}
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-mono text-xs font-bold text-foreground truncate">
+                      {step.file}
+                    </span>
+                    <p className="text-xs text-secondary mt-0.5 leading-relaxed">
+                      {step.reason}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigateToScreen("architecture", step.file);
+                    }}
+                    className="flex cursor-pointer items-center gap-1 rounded-xs border border-border bg-surface px-2.5 py-1 text-[11px] font-mono text-secondary hover:border-accent/40 hover:text-foreground transition-colors"
+                  >
+                    Inspect in Graph <ExternalLink className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Entry Points & High Caution Areas */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Entry Points */}
+        <div className="rounded-md border border-border bg-surface p-4 shadow-2xs flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FileCode className="h-4 w-4 text-emerald" />
+              <h2 className="text-xs font-semibold text-foreground tracking-wide uppercase">
+                2. Application Entry Points
+              </h2>
+            </div>
+            <span className="text-[11px] font-mono text-muted">
+              {guide.entryPoints.length} files
+            </span>
+          </div>
+          <p className="text-[11px] text-muted">
+            Execution starts here. Trace outbound imports from these files to understand initialization.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            {guide.entryPoints.map((ep) => (
               <div
                 key={ep}
-                className="flex items-center gap-3 rounded-sm border border-border bg-surface px-3 py-2.5"
+                onClick={() => navigateToScreen("architecture", ep)}
+                className="flex items-center justify-between rounded-xs border border-border/80 bg-raised/30 p-2.5 text-xs transition-colors hover:border-accent/40 hover:bg-raised cursor-pointer"
               >
-                <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-raised font-mono text-xs text-muted">
-                  {i + 1}
-                </span>
-                <span className="font-mono text-sm text-foreground">{ep}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Recommended exploration path */}
-      {guide.recommendedPath.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-sm font-medium text-secondary">
-            2. Recommended Exploration Path
-          </h2>
-          <p className="mb-3 text-xs text-muted">
-            These modules are ordered by relevance and risk — start with low-risk foundational
-            modules before tackling complex areas.
-          </p>
-          <div className="flex flex-col gap-2">
-            {guide.recommendedPath.map((r) => (
-              <div
-                key={r.file}
-                className="flex items-start gap-3 rounded-sm border border-border bg-surface px-3 py-3"
-              >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-foreground/10 font-mono text-xs font-medium text-foreground">
-                  {r.step}
-                </span>
-                <div className="flex flex-col gap-0.5">
-                  <span className="font-mono text-sm text-foreground">{r.file}</span>
-                  <span className="text-xs text-secondary">{r.reason}</span>
+                <div className="flex items-center gap-2 font-mono text-foreground font-medium truncate">
+                  <FileCode className="h-3.5 w-3.5 text-accent shrink-0" />
+                  <span className="truncate">{ep}</span>
                 </div>
+                <ArrowRight className="h-3.5 w-3.5 text-muted shrink-0" />
               </div>
             ))}
           </div>
-        </section>
-      )}
+        </div>
 
-      {/* Major modules */}
-      {guide.majorModules.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-sm font-medium text-secondary">
-            3. Major Modules
-          </h2>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {guide.majorModules.map((m) => (
-              <div
-                key={m.name}
-                className="rounded-sm border border-border bg-surface px-3 py-2.5"
-              >
-                <span className="font-mono text-sm font-medium text-foreground">
-                  {m.name}
-                </span>
-                <p className="text-xs text-secondary">{m.description}</p>
-                <span className="font-mono text-[11px] text-muted">
-                  {m.fileCount} file{m.fileCount === 1 ? "" : "s"}
-                </span>
-              </div>
-            ))}
+        {/* High-Caution Modules */}
+        <div className="rounded-md border border-border bg-surface p-4 shadow-2xs flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-rust" />
+              <h2 className="text-xs font-semibold text-foreground tracking-wide uppercase">
+                3. Approach With Care
+              </h2>
+            </div>
+            <span className="text-[11px] font-mono text-muted">
+              {guide.riskyModules.length} modules
+            </span>
           </div>
-        </section>
-      )}
-
-      {/* Risky modules */}
-      {guide.riskyModules.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-sm font-medium text-secondary">
-            4. Modules to Approach Carefully
-          </h2>
-          <p className="mb-3 text-xs text-muted">
-            These modules have elevated risk scores. Understand them before making changes.
+          <p className="text-[11px] text-muted">
+            These modules carry heavy churn or high coupling. Advise pairing or writing end-to-end tests before modifying.
           </p>
-          <div className="flex flex-wrap gap-2">
-            {guide.riskyModules.map((m) => (
-              <span
-                key={m}
-                className="inline-flex items-center gap-1.5 rounded-sm border border-rust/30 bg-rust/8 px-2.5 py-1.5 font-mono text-xs text-rust"
-              >
-                {m}
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
 
-      {/* Primary contributors */}
-      {guide.primaryContributors.some((pc) => pc.people.length > 0) && (
-        <section>
-          <h2 className="mb-3 text-sm font-medium text-secondary">
-            5. Who Knows What
-          </h2>
-          <p className="mb-3 text-xs text-muted">
-            Contributors with the highest historical activity in each module.
-          </p>
-          <div className="flex flex-col gap-1">
-            {guide.primaryContributors
-              .filter((pc) => pc.people.length > 0)
-              .slice(0, 8)
-              .map((pc) => (
+          <div className="flex flex-col gap-2">
+            {guide.riskyModules.length === 0 ? (
+              <p className="text-xs text-muted py-4 text-center">
+                No high-caution modules detected. System architecture is cleanly balanced.
+              </p>
+            ) : (
+              guide.riskyModules.map((m) => (
                 <div
-                  key={pc.module}
-                  className="flex items-center gap-3 rounded-sm border border-border bg-surface px-3 py-2.5 text-sm"
+                  key={m}
+                  onClick={() => navigateToScreen("tech-debt", m)}
+                  className="flex items-center justify-between rounded-xs border border-rust/30 bg-rust/10 p-2.5 text-xs transition-colors hover:border-rust/50 cursor-pointer"
                 >
-                  <span className="font-mono text-xs text-foreground">{pc.module}</span>
-                  <span className="text-muted">→</span>
-                  <span className="text-xs text-secondary">
-                    {pc.people.join(", ")}
+                  <span className="font-mono text-rust font-semibold truncate">{m}</span>
+                  <span className="flex items-center gap-1 font-mono text-[11px] text-rust">
+                    Inspect in Tech Debt <ArrowRight className="h-3 w-3" />
                   </span>
                 </div>
-              ))}
+              ))
+            )}
           </div>
-        </section>
+        </div>
+      </div>
+
+      {/* Codebase Ownership Directory: "Who Knows What" */}
+      {guide.primaryContributors.length > 0 && (
+        <div className="rounded-md border border-border bg-surface p-5 shadow-2xs flex flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-border pb-3">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-accent" />
+              <h2 className="text-xs font-semibold text-foreground tracking-wide uppercase">
+                4. Codebase Ownership & PR Review Directory
+              </h2>
+            </div>
+            <span className="text-[11px] text-muted font-mono">
+              Identified from historical commit authorship
+            </span>
+          </div>
+
+          <p className="text-xs text-secondary">
+            When you need PR reviews, architecture clarification, or domain questions answered, these teammates have historical commit ownership in each area:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+            {guide.primaryContributors.map((c) => (
+              <div
+                key={c.module}
+                className="flex flex-col gap-1.5 rounded-sm border border-border/80 bg-raised/30 p-3 text-xs"
+              >
+                <div className="flex items-center gap-2 font-mono font-bold text-foreground">
+                  <Layers className="h-3.5 w-3.5 text-accent" />
+                  <span className="truncate">{c.module}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                  <span className="text-[11px] text-muted">Lead engineers:</span>
+                  {c.people.map((p) => (
+                    <span
+                      key={p}
+                      className="rounded-xs bg-surface border border-border px-1.5 py-0.5 font-mono text-[10px] text-foreground font-medium"
+                    >
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
-
-      <p className="text-xs text-muted">
-        Source: Static Analysis + Git History. Recommendations are evidence-based, not AI-generated.
-      </p>
-    </div>
-  );
-}
-
-function InfoCard({
-  label,
-  value,
-  state,
-}: {
-  label: string;
-  value: string;
-  state?: "warn" | "ok";
-}) {
-  const dot = state ? (
-    <span
-      className={`inline-block h-2 w-2 rounded-full ${
-        state === "warn" ? "bg-amber" : "bg-emerald"
-      }`}
-    />
-  ) : null;
-  return (
-    <div className="rounded-sm border border-border bg-surface px-3 py-2.5">
-      <p className="text-xs text-secondary">{label}</p>
-      <p className="mt-0.5 flex items-center gap-2 font-mono text-sm font-medium text-foreground">
-        {value}
-        {dot}
-      </p>
     </div>
   );
 }

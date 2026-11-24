@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowRight, AlertTriangle, RefreshCw } from "lucide-react";
+import { ArrowRight, AlertTriangle } from "lucide-react";
 
 export interface CircularDepItem {
   cycle: string[];
@@ -8,6 +8,7 @@ export interface CircularDepItem {
 interface CircularDependencyGraphProps {
   cycles: CircularDepItem[];
   className?: string;
+  onSelectFile?: (filePath: string) => void;
 }
 
 function getBasename(path: string): string {
@@ -18,6 +19,7 @@ function getBasename(path: string): string {
 export function CircularDependencyGraph({
   cycles,
   className = "",
+  onSelectFile,
 }: CircularDependencyGraphProps) {
   const [activeCycleIdx, setActiveCycleIdx] = useState(0);
 
@@ -28,9 +30,9 @@ export function CircularDependencyGraph({
   const count = nodes.length;
 
   // Geometry for circular layout
-  const size = 360;
+  const size = 380;
   const center = size / 2;
-  const radius = Math.min(130, Math.max(70, count * 28));
+  const radius = Math.min(135, Math.max(75, count * 30));
 
   // Compute node coordinates along circle
   const nodeCoords = nodes.map((file, i) => {
@@ -44,31 +46,38 @@ export function CircularDependencyGraph({
   });
 
   return (
-    <div className={`flex flex-col gap-4 rounded-sm border border-border bg-surface p-4 ${className}`}>
-      {/* Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-        <div className="flex items-center gap-2">
-          <AlertTriangle className="h-4 w-4 text-rust" aria-hidden="true" />
-          <span className="text-xs font-medium text-foreground">
-            {cycles.length} Circular Dependenc{cycles.length === 1 ? "y" : "ies"} Detected
-          </span>
+    <div className={`flex flex-col gap-4 rounded-md border border-rust/40 bg-surface/90 p-5 shadow-lg ${className}`}>
+      {/* Header Banner */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 pb-3">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-7 w-7 items-center justify-center rounded-xs bg-rust/15 text-rust border border-rust/30">
+            <AlertTriangle className="h-4 w-4" />
+          </div>
+          <div>
+            <h3 className="text-xs font-bold text-foreground uppercase tracking-wide">
+              {cycles.length} Circular Reference Chain{cycles.length === 1 ? "" : "s"} Detected
+            </h3>
+            <p className="text-[11px] text-muted">
+              Cycles cause initialization order bugs, bundler chunk fragmentation & memory leaks.
+            </p>
+          </div>
         </div>
 
         {/* Cycle selector buttons if multiple */}
         {cycles.length > 1 && (
-          <div className="flex items-center gap-1">
-            {cycles.map((_, i) => (
+          <div className="flex items-center gap-1.5">
+            {cycles.map((c, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => setActiveCycleIdx(i)}
-                className={`cursor-pointer rounded-sm px-2 py-0.5 text-xs font-mono transition-colors ${
+                className={`cursor-pointer rounded-xs px-2.5 py-1 text-xs font-mono transition-all ${
                   activeCycleIdx === i
-                    ? "bg-rust/20 text-rust font-bold border border-rust/40"
-                    : "text-muted hover:bg-raised hover:text-foreground"
+                    ? "bg-rust text-white font-bold shadow-2xs"
+                    : "border border-border bg-raised/50 text-muted hover:text-foreground"
                 }`}
               >
-                Cycle {i + 1}
+                Loop {i + 1} ({c.cycle.length} files)
               </button>
             ))}
           </div>
@@ -79,19 +88,19 @@ export function CircularDependencyGraph({
       <div className="flex flex-col items-center justify-center p-2">
         <svg
           viewBox={`0 0 ${size} ${size}`}
-          className="w-full max-w-[360px] h-auto overflow-visible select-none"
+          className="w-full max-w-[380px] h-auto overflow-visible select-none"
         >
           <defs>
             <marker
               id="cycle-arrow"
               viewBox="0 -5 10 10"
-              refX="8"
+              refX="10"
               refY="0"
               markerWidth="6"
               markerHeight="6"
               orient="auto"
             >
-              <path d="M0,-4L8,0L0,4" fill="#f87171" />
+              <path d="M0,-4L9,0L0,4" fill="var(--color-rust)" />
             </marker>
           </defs>
 
@@ -101,8 +110,8 @@ export function CircularDependencyGraph({
             cy={center}
             r={radius}
             fill="none"
-            stroke="rgba(244, 63, 94, 0.08)"
-            strokeWidth={18}
+            stroke="var(--color-rust-muted)"
+            strokeWidth={24}
           />
 
           {/* Directed Links between sequential nodes in cycle */}
@@ -112,43 +121,48 @@ export function CircularDependencyGraph({
             const dy = next.y - cur.y;
             const dist = Math.hypot(dx, dy) || 1;
 
-            const startX = cur.x + (dx / dist) * 16;
-            const startY = cur.y + (dy / dist) * 16;
-            const endX = next.x - (dx / dist) * 20;
-            const endY = next.y - (dy / dist) * 20;
+            const startX = cur.x + (dx / dist) * 18;
+            const startY = cur.y + (dy / dist) * 18;
+            const endX = next.x - (dx / dist) * 22;
+            const endY = next.y - (dy / dist) * 22;
 
             // Slight curve for circular flow
-            const midX = (cur.x + next.x) / 2 + (cur.y - next.y) * 0.12;
-            const midY = (cur.y + next.y) / 2 + (next.x - cur.x) * 0.12;
+            const midX = (cur.x + next.x) / 2 + (cur.y - next.y) * 0.15;
+            const midY = (cur.y + next.y) / 2 + (next.x - cur.x) * 0.15;
 
             return (
               <path
                 key={i}
                 d={`M ${startX} ${startY} Q ${midX} ${midY} ${endX} ${endY}`}
                 fill="none"
-                stroke="#f87171"
-                strokeWidth={2}
+                stroke="var(--color-rust)"
+                strokeWidth={2.2}
                 markerEnd="url(#cycle-arrow)"
                 strokeDasharray="4 3"
-                className="animate-pulse"
               />
             );
           })}
 
           {/* Nodes */}
           {nodeCoords.map((node, i) => (
-            <g key={i} transform={`translate(${node.x}, ${node.y})`}>
+            <g
+              key={i}
+              transform={`translate(${node.x}, ${node.y})`}
+              className="cursor-pointer"
+              onClick={() => onSelectFile?.(node.file)}
+            >
               <circle
-                r={16}
+                r={17}
                 fill="var(--color-surface)"
-                stroke="#f87171"
+                stroke="var(--color-rust)"
                 strokeWidth={2}
+                filter="drop-shadow(0 2px 4px rgba(0,0,0,0.4))"
               />
-              <circle r={4} fill="#f87171" />
+              <circle r={4.5} fill="var(--color-rust)" />
               <text
                 y={28}
                 textAnchor="middle"
-                className="font-mono text-[11px] font-semibold"
+                className="font-mono text-[11px] font-bold"
                 fill="var(--color-foreground)"
               >
                 {node.name}
@@ -158,16 +172,21 @@ export function CircularDependencyGraph({
         </svg>
 
         {/* Cycle Step by Step Chain */}
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs">
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-xs">
           {nodes.map((file, i) => (
-            <span key={i} className="flex items-center gap-1.5 font-mono text-foreground">
-              <span className="rounded-sm bg-rust/10 border border-rust/30 px-2 py-1 text-rust font-medium">
+            <div key={i} className="flex items-center gap-1.5 font-mono">
+              <button
+                type="button"
+                onClick={() => onSelectFile?.(file)}
+                title={file}
+                className="cursor-pointer rounded-xs bg-rust/15 border border-rust/40 px-2.5 py-1 text-rust font-bold hover:bg-rust/25 transition-colors"
+              >
                 {getBasename(file)}
-              </span>
+              </button>
               <ArrowRight className="h-3.5 w-3.5 text-rust/70" />
-            </span>
+            </div>
           ))}
-          <span className="rounded-sm bg-rust/10 border border-rust/30 px-2 py-1 text-rust font-medium font-mono">
+          <span className="rounded-xs bg-rust/15 border border-rust/40 px-2.5 py-1 text-rust font-bold font-mono">
             {getBasename(nodes[0])}
           </span>
         </div>
@@ -175,4 +194,3 @@ export function CircularDependencyGraph({
     </div>
   );
 }
-

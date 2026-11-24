@@ -18,9 +18,7 @@ import {
   RotateCcw,
   FileCode,
   ArrowRight,
-  ExternalLink,
   X,
-  Info,
   Layers,
 } from "lucide-react";
 
